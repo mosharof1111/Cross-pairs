@@ -6,10 +6,11 @@ const fs = require('fs');
 const path = require('path');
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const GAMMA_API = 'https://gamma-api.polymarket.com';
-const CLOB_WS   = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
+const GAMMA_API  = 'https://gamma-api.polymarket.com';
+const CLOB_WS    = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const TRADES_FILE = path.join(__dirname, 'trades.json');
 
+const TIMEFRAMES = ['15m', '4h'];
 const WINDOW_SIZES = { '15m': 900, '4h': 14400 };
 const ENTRY_THRESHOLD = -0.20;
 const EXIT_THRESHOLD  =  0.05;
@@ -24,8 +25,8 @@ let state = {
   totalPnl: 0,
 };
 
-const priceBook = {};   // tokenId → { bid, ask }
-const marketCache = {}; // `${tf}-${windowStart}` → window object
+const priceBook   = {};  // tokenId → { bid, ask }
+const marketCache = {};  // `${tf}-${windowStart}` → window object
 
 let emitFn = () => {};
 let logFn  = () => {};
@@ -67,76 +68,156 @@ function log(msg) {
   logFn(line);
 }
 
-// ─── Slug / Window Helpers ────────────────────────────────────────────────────
+// ─── Window Helpers ───────────────────────────────────────────────────────────
 function currentWindowStart(tf) {
   const size = WINDOW_SIZES[tf];
-  const now  = Math.floor(Date.now() / 1000);
-  return Math.floor(now / size) * size;
-}
-
-function makeSlug(asset, tf, windowStart) {
-  return `${asset.toLowerCase()}-updown-${tf}-${windowStart}`;
+  return Math.floor(Math.floor(Date.now() / 1000) / size) * size;
 }
 
 // ─── Gamma API ────────────────────────────────────────────────────────────────
-async function fetchMarketBySlug(slugStr) {
+// Search for active markets whose slug contains the search string.
+// Returns array of market objects.
+async function searchMarkets(slugContains) {
   try {
-    const url = `${GAMMA_API}/markets?slug=${encodeURIComponent(slugStr)}`;
+    const url = `${GAMMA_API}/markets?slug_contains=${encodeURIComponent(slugContains)}&active=true&closed=false&acceptingOrders=true&limit=10`;
     const res = await fetch(url, { timeout: 10000 });
     if (!res.ok) {
-      log(`⚠️  Gamma HTTP ${res.status} for: ${slugStr}`);
-      return null;
+      log(`⚠️  Gamma HTTP ${res.status} for slug_contains=${slugContains}`);
+      return [];
     }
     const data = await res.json();
-    const list = Array.isArray(data) ? data : (data.markets ?? []);
-    if (list.length === 0) {
-      log(`⚠️  Gamma empty result for: ${slugStr}`);
-      return null;
-    }
-    return list[0];
+    return Array.isArray(data) ? data : (data.markets ?? []);
   } catch (e) {
-    log(`⚠️  Gamma fetch error (${slugStr}): ${e.message}`);
-    return null;
+    log(`⚠️  Gamma searchMarkets error (${slugContains}): ${e.message}`);
+    return [];
   }
 }
 
 // Extract Up/Down token IDs from a Gamma market object.
-// Primary: clobTokenIds[0] = Up, clobTokenIds[1] = Down
+// clobTokenIds is a JSON-stringified array: "[\"tokenA\",\"tokenB\"]"
+// index 0 = Up/Yes, index 1 = Down/No
 function extractTokenIds(market) {
   if (!market) return null;
 
-  // ── Primary: clobTokenIds ──────────────────────────────────────────────────
-  if (Array.isArray(market.clobTokenIds) && market.clobTokenIds.length >= 2) {
-    const up = market.clobTokenIds[0];
-    const dn = market.clobTokenIds[1];
-    if (up && dn) return { upToken: String(up), dnToken: String(dn) };
+  // ── Primary: clobTokenIds (may be a JSON string or array) ─────────────────
+  let ids = market.clobTokenIds;
+  if (typeof ids === 'string') {
+    try { ids = JSON.parse(ids); } catch (_) { ids = null; }
+  }
+  if (Array.isArray(ids) && ids.length >= 2 && ids[0] && ids[1]) {
+    return { upToken: String(ids[0]), dnToken: String(ids[1]) };
   }
 
-  // ── Fallback: tokens array with outcome labels ─────────────────────────────
+  // ── Fallback: tokens array ─────────────────────────────────────────────────
   if (Array.isArray(market.tokens) && market.tokens.length >= 2) {
     const upTok = market.tokens.find(t => /up|yes|higher/i.test(t.outcome ?? t.name ?? ''));
     const dnTok = market.tokens.find(t => /down|no|lower/i.test(t.outcome ?? t.name ?? ''));
-    if (upTok?.token_id && dnTok?.token_id) {
-      return { upToken: upTok.token_id, dnToken: dnTok.token_id };
-    }
-    const t0 = market.tokens[0]?.token_id;
-    const t1 = market.tokens[1]?.token_id;
+    if (upTok?.token_id && dnTok?.token_id) return { upToken: upTok.token_id, dnToken: dnTok.token_id };
+    const t0 = market.tokens[0]?.token_id, t1 = market.tokens[1]?.token_id;
     if (t0 && t1) return { upToken: t0, dnToken: t1 };
   }
 
-  // ── snake_case variant ─────────────────────────────────────────────────────
-  if (Array.isArray(market.clob_token_ids) && market.clob_token_ids.length >= 2) {
-    return { upToken: String(market.clob_token_ids[0]), dnToken: String(market.clob_token_ids[1]) };
-  }
-
-  // Log available keys to help debug further if still failing
-  log(`⚠️  extractTokenIds failed. Keys: ${Object.keys(market).join(', ')}`);
-  log(`    clobTokenIds=${JSON.stringify(market.clobTokenIds)} tokens=${JSON.stringify(market.tokens?.slice(0,2))}`);
+  log(`⚠️  extractTokenIds failed for slug=${market.slug}. Keys: ${Object.keys(market).join(', ')}`);
+  log(`    clobTokenIds raw: ${JSON.stringify(market.clobTokenIds)}`);
   return null;
 }
 
+// Extract the unix timestamp from a slug like "btc-updown-15m-1778806800"
+function timestampFromSlug(slug) {
+  const m = slug.match(/-(\d{9,11})$/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+// ─── Market Discovery ─────────────────────────────────────────────────────────
+async function refreshMarkets() {
+  for (const tf of TIMEFRAMES) {
+    const currentWs = currentWindowStart(tf);
+    const cacheKey  = `${tf}-${currentWs}`;
+    if (marketCache[cacheKey]) continue;
+
+    log(`🔍 Searching active ${tf} markets…`);
+
+    // Search BTC and ETH in parallel
+    const [btcList, ethList] = await Promise.all([
+      searchMarkets(`btc-updown-${tf}`),
+      searchMarkets(`eth-updown-${tf}`),
+    ]);
+
+    log(`   BTC results: ${btcList.length} | ETH results: ${ethList.length}`);
+    if (btcList.length) log(`   BTC slugs: ${btcList.map(m => m.slug).join(', ')}`);
+    if (ethList.length) log(`   ETH slugs: ${ethList.map(m => m.slug).join(', ')}`);
+
+    // Pick the market whose slug timestamp matches current window.
+    // If no exact match, pick the most recent accepting-orders market.
+    const btcMkt = pickBestMarket(btcList, tf, currentWs);
+    const ethMkt = pickBestMarket(ethList, tf, currentWs);
+
+    if (!btcMkt || !ethMkt) {
+      log(`⚠️  No matching ${tf} market found — will retry`);
+      continue;
+    }
+
+    const btcTokens = extractTokenIds(btcMkt);
+    const ethTokens = extractTokenIds(ethMkt);
+
+    if (!btcTokens || !ethTokens) {
+      log(`⚠️  Token extract failed for ${tf} — will retry`);
+      continue;
+    }
+
+    // Use the timestamp from the slug as the canonical windowStart
+    const btcWs = timestampFromSlug(btcMkt.slug) ?? currentWs;
+
+    marketCache[cacheKey] = {
+      tf,
+      windowStart: btcWs,
+      btcUp: btcTokens.upToken,
+      btcDn: btcTokens.dnToken,
+      ethUp: ethTokens.upToken,
+      ethDn: ethTokens.dnToken,
+      btcSlug: btcMkt.slug,
+      ethSlug: ethMkt.slug,
+    };
+
+    log(`✅ Cached ${tf} ws=${btcWs} | BTC=${btcMkt.slug} | ETH=${ethMkt.slug}`);
+    log(`   BTC↑ ${btcTokens.upToken.slice(0,12)}… BTC↓ ${btcTokens.dnToken.slice(0,12)}…`);
+    log(`   ETH↑ ${ethTokens.upToken.slice(0,12)}… ETH↓ ${ethTokens.dnToken.slice(0,12)}…`);
+
+    for (const tid of [btcTokens.upToken, btcTokens.dnToken, ethTokens.upToken, ethTokens.dnToken]) {
+      subscribeToken(tid);
+    }
+  }
+}
+
+// Pick the best market from a list for a given timeframe and expected window start
+function pickBestMarket(list, tf, expectedWs) {
+  if (!list.length) return null;
+
+  // 1. Exact slug timestamp match
+  const exact = list.find(m => {
+    const ts = timestampFromSlug(m.slug);
+    return ts === expectedWs;
+  });
+  if (exact) return exact;
+
+  // 2. Closest future window that is accepting orders
+  const accepting = list.filter(m => m.acceptingOrders !== false);
+  if (accepting.length) {
+    // sort by slug timestamp descending (newest first)
+    accepting.sort((a, b) => {
+      const ta = timestampFromSlug(a.slug) ?? 0;
+      const tb = timestampFromSlug(b.slug) ?? 0;
+      return tb - ta;
+    });
+    return accepting[0];
+  }
+
+  // 3. Any market
+  return list[0];
+}
+
 // ─── WebSocket Price Feed ─────────────────────────────────────────────────────
-let ws = null;
+let ws      = null;
 let wsReady = false;
 const pendingSubscriptions = new Set();
 
@@ -147,7 +228,7 @@ function connectWebSocket() {
   ws.on('open', () => {
     wsReady = true;
     log('✅ WebSocket connected');
-    for (const tokenId of pendingSubscriptions) _sendSubscribe(tokenId);
+    for (const tid of pendingSubscriptions) _sendSubscribe(tid);
     pendingSubscriptions.clear();
   });
 
@@ -189,42 +270,14 @@ function handleWsMessage(msg) {
   if (bid > 0 || ask > 0) priceBook[tokenId] = { bid, ask };
 }
 
-// ─── Market Discovery ─────────────────────────────────────────────────────────
-async function refreshMarkets() {
-  for (const tf of Object.keys(WINDOW_SIZES)) {
-    const ws_ = currentWindowStart(tf);
-    const cacheKey = `${tf}-${ws_}`;
-    if (marketCache[cacheKey]) continue;
-
-    const btcSlug = makeSlug('btc', tf, ws_);
-    const ethSlug = makeSlug('eth', tf, ws_);
-
-    log(`🔍 Fetching ${tf} window ${ws_}`);
-
-    const [btcMkt, ethMkt] = await Promise.all([
-      fetchMarketBySlug(btcSlug),
-      fetchMarketBySlug(ethSlug),
-    ]);
-
-    const btcTokens = extractTokenIds(btcMkt);
-    const ethTokens = extractTokenIds(ethMkt);
-
-    if (!btcTokens || !ethTokens) {
-      log(`⚠️  Token extract failed for ${tf}/${ws_} — will retry next tick`);
-      continue;
-    }
-
-    marketCache[cacheKey] = {
-      tf, windowStart: ws_,
-      btcUp: btcTokens.upToken, btcDn: btcTokens.dnToken,
-      ethUp: ethTokens.upToken, ethDn: ethTokens.dnToken,
-      btcSlug, ethSlug,
-    };
-
-    log(`✅ Cached ${tf}/${ws_} | BTC↑ ${btcTokens.upToken.slice(0,10)}… ETH↑ ${ethTokens.upToken.slice(0,10)}…`);
-
-    for (const tid of [btcTokens.upToken, btcTokens.dnToken, ethTokens.upToken, ethTokens.dnToken]) {
-      subscribeToken(tid);
+// ─── Stale window cleanup ─────────────────────────────────────────────────────
+function pruneStaleWindows() {
+  for (const key of Object.keys(marketCache)) {
+    const w = marketCache[key];
+    const currentWs = currentWindowStart(w.tf);
+    // Keep up to 1 window behind (for open trades), prune older
+    if (w.windowStart < currentWs - WINDOW_SIZES[w.tf]) {
+      delete marketCache[key];
     }
   }
 }
@@ -236,35 +289,35 @@ function getBid(tokenId) { return priceBook[tokenId]?.bid ?? 0; }
 // ─── Arbitrage Logic ──────────────────────────────────────────────────────────
 function tradeId() { return `T${Date.now().toString(36).toUpperCase()}`; }
 
-function checkEntry(window_) {
-  const { tf, windowStart, btcUp, btcDn, ethUp, ethDn } = window_;
-  const btcUpAsk = getAsk(btcUp), btcDnAsk = getAsk(btcDn);
-  const ethUpAsk = getAsk(ethUp), ethDnAsk = getAsk(ethDn);
+function checkEntry(w) {
+  const btcUpAsk = getAsk(w.btcUp), btcDnAsk = getAsk(w.btcDn);
+  const ethUpAsk = getAsk(w.ethUp), ethDnAsk = getAsk(w.ethDn);
 
+  // Reject if any price is missing (NO mid fallback)
   if (![btcUpAsk, btcDnAsk, ethUpAsk, ethDnAsk].every(p => p > 0)) return;
 
-  const alreadyOpen = state.openTrades.some(t => t.windowStart === windowStart && t.tf === tf);
+  const alreadyOpen = state.openTrades.some(t => t.windowStart === w.windowStart && t.tf === w.tf);
   if (alreadyOpen) return;
 
-  const gap1 = btcUpAsk + ethDnAsk - 1;
-  const gap2 = ethUpAsk + btcDnAsk - 1;
+  const gap1 = btcUpAsk + ethDnAsk - 1;  // BTC↑ + ETH↓
+  const gap2 = ethUpAsk + btcDnAsk - 1;  // ETH↑ + BTC↓
 
   if (gap1 <= ENTRY_THRESHOLD) {
-    enterTrade(window_, 'BTC_UP+ETH_DN', btcUp, ethDn, btcUpAsk, ethDnAsk, gap1);
+    enterTrade(w, 'BTC_UP+ETH_DN', w.btcUp, w.ethDn, btcUpAsk, ethDnAsk, gap1);
   } else if (gap2 <= ENTRY_THRESHOLD) {
-    enterTrade(window_, 'ETH_UP+BTC_DN', ethUp, btcDn, ethUpAsk, btcDnAsk, gap2);
+    enterTrade(w, 'ETH_UP+BTC_DN', w.ethUp, w.btcDn, ethUpAsk, btcDnAsk, gap2);
   }
 }
 
-function enterTrade(window_, type, legAToken, legBToken, legAAsk, legBAsk, entryGap) {
+function enterTrade(w, type, legAToken, legBToken, legAAsk, legBAsk, entryGap) {
   const entryCost = (legAAsk + legBAsk) * SHARES;
   if (state.balance < entryCost) {
     log(`💸 Insufficient balance ($${state.balance.toFixed(2)}) for $${entryCost.toFixed(2)}`);
     return;
   }
   const trade = {
-    id: tradeId(), tf: window_.tf, windowStart: window_.windowStart,
-    type, legAToken, legBToken, legAAsk, legBAsk,
+    id: tradeId(), tf: w.tf, windowStart: w.windowStart, type,
+    legAToken, legBToken, legAAsk, legBAsk,
     entryCost, shares: SHARES,
     entryGap: entryGap.toFixed(4),
     openedAt: new Date().toISOString(),
@@ -273,14 +326,13 @@ function enterTrade(window_, type, legAToken, legBToken, legAAsk, legBAsk, entry
   state.balance -= entryCost;
   state.openTrades.push(trade);
   saveState();
-  log(`🟢 ENTRY [${trade.id}] ${type} | tf=${window_.tf} | gap=${entryGap.toFixed(4)} | cost=$${entryCost.toFixed(2)} | bal=$${state.balance.toFixed(2)}`);
+  log(`🟢 ENTRY [${trade.id}] ${type} | tf=${w.tf} | gap=${entryGap.toFixed(4)} | cost=$${entryCost.toFixed(2)} | bal=$${state.balance.toFixed(2)}`);
   emitFn('trade_entered', trade);
 }
 
 function checkExits() {
   for (const trade of [...state.openTrades]) {
-    const bidA = getBid(trade.legAToken);
-    const bidB = getBid(trade.legBToken);
+    const bidA = getBid(trade.legAToken), bidB = getBid(trade.legBToken);
     if (bidA <= 0 || bidB <= 0) continue;
     const exitProceeds = (bidA + bidB) * trade.shares;
     const exitGap = bidA + bidB - 1;
@@ -311,6 +363,7 @@ function buildDashboardSnapshot() {
     const ethUpBid = getBid(w.ethUp), ethDnBid = getBid(w.ethDn);
     return {
       key: `${w.tf}-${w.windowStart}`, tf: w.tf, windowStart: w.windowStart,
+      btcSlug: w.btcSlug, ethSlug: w.ethSlug,
       btcUpAsk, btcDnAsk, ethUpAsk, ethDnAsk,
       btcUpBid, btcDnBid, ethUpBid, ethDnBid,
       entryGap1: (btcUpAsk > 0 && ethDnAsk > 0) ? +(btcUpAsk + ethDnAsk - 1).toFixed(4) : null,
@@ -331,6 +384,7 @@ let loopTimer = null;
 
 async function tick() {
   try {
+    pruneStaleWindows();
     await refreshMarkets();
     for (const w of Object.values(marketCache)) {
       if (w.windowStart !== currentWindowStart(w.tf)) continue;
