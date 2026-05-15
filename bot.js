@@ -16,8 +16,8 @@ const TIMEFRAMES = [
   { tf: '15m', size: 900 },
 ];
 
-const ENTRY_THRESHOLD = -0.20;
-const EXIT_THRESHOLD  =  0.05;
+const ENTRY_THRESHOLD = -0.10;
+const EXIT_THRESHOLD  =  0.02;
 const SHARES          = 50;
 const STARTING_BALANCE = 1000;
 
