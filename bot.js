@@ -157,31 +157,42 @@ async function findTokensForSlug(slug) {
 let discovering = false;
 async function refreshMarkets() {
   if (discovering) return;
-  if (getCurrentMarket()) return;
   discovering = true;
   const cws = currentWindowStart();
-  log(`🔍 Finding 5m market for window ${cws}…`);
+  const nextWs = cws + WINDOW_SIZE;
+  // Find current window if not cached
+  const needCurrent = !getCurrentMarket();
+  // Pre-fetch next window if not cached (do this in last 60s of current window)
+  const nowSec = Math.floor(Date.now() / 1000);
+  const elapsed = nowSec - cws;
+  const needNext = elapsed >= 240 && !marketCache[nextWs];
+  const slugsToFetch = [];
+  if (needCurrent) slugsToFetch.push({ ts: cws, label: "current" });
+  if (needNext) slugsToFetch.push({ ts: nextWs, label: "next" });
+  if (!slugsToFetch.length) { discovering = false; return; }
   try {
-    for (const offset of [0, 1, -1, 2, -2, 3]) {
-      const ts      = cws + offset * WINDOW_SIZE;
-      const btcSlug = `btc-updown-5m-${ts}`;
-      const ethSlug = `eth-updown-5m-${ts}`;
-      const [btcTokens, ethTokens] = await Promise.all([
-        findTokensForSlug(btcSlug),
-        findTokensForSlug(ethSlug),
-      ]);
-      if (!btcTokens || !ethTokens) continue;
-      marketCache[ts] = {
-        windowStart: ts,
-        btcUp: btcTokens.upToken, btcDn: btcTokens.dnToken,
-        ethUp: ethTokens.upToken, ethDn: ethTokens.dnToken,
-        btcSlug, ethSlug,
-      };
-      log(`✅ 5m found ts=${ts} | ${btcSlug}`);
-      break;
+    for (const { ts, label } of slugsToFetch) {
+      if (marketCache[ts]) continue;
+      log(`🔍 Finding 5m ${label} window ${ts}…`);
+      for (const offset of [0, 1, -1, 2, -2]) {
+        const t = ts + offset * WINDOW_SIZE;
+        const btcSlug = `btc-updown-5m-${t}`;
+        const ethSlug = `eth-updown-5m-${t}`;
+        const [btcTokens, ethTokens] = await Promise.all([
+          findTokensForSlug(btcSlug),
+          findTokensForSlug(ethSlug),
+        ]);
+        if (!btcTokens || !ethTokens) continue;
+        marketCache[t] = { windowStart: t,
+          btcUp: btcTokens.upToken, btcDn: btcTokens.dnToken,
+          ethUp: ethTokens.upToken, ethDn: ethTokens.dnToken,
+          btcSlug, ethSlug };
+        log(`✅ 5m ${label} found ts=${t} | ${btcSlug}`);
+        break;
+      }
+      if (!marketCache[ts]) log(`⚠️  5m ${label} not found — will retry`);
     }
   } finally { discovering = false; }
-  if (!getCurrentMarket()) log(`⚠️  5m: not found — will retry`);
 }
 
 // ── REST price polling — ONLY price source, every 2 seconds ──────────────────
@@ -252,7 +263,8 @@ async function checkWindow(w) {
     await flip(w, wst, 'UP', ethUp, ethDn); return;
   }
 
-  // Ladder buys
+  // Ladder buys — buy ETH side when BTC leads by >= 0.30
+  // e.g. BTC↓=0.70, ETH↓=0.40 → diff=0.30 → buy ETH↓
   if (btcUp >= 0.70 && (wst.side === 'UP' || wst.side === null)) {
     for (let i = 0; i < LADDER.length; i++) {
       if (wst.levelsHit.has(i)) continue;
