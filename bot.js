@@ -485,11 +485,12 @@ async function tick() {
     await refreshMarkets();
     const w = getCurrentMarket();
     if (w) {
+      await pollPrices();
       updateFloating();
       await checkWindow(w);
       await checkResolution();
     }
-    emitFn('snapshot', buildDashboardSnapshot());
+    emitFn("snapshot", buildDashboardSnapshot());
   } catch (e) { log(`⚠️  tick: ${e.message}`); }
 }
 
@@ -498,8 +499,19 @@ async function start(emit, logEmit) {
   log('🚀 Polymarket ETH Ladder Bot (5m)');
   loadState(); connectWS(); await tick();
   timer     = setInterval(tick, 5000);
-  pollTimer = setInterval(pollPrices, 10000);
+  // Emit prices every second using latest priceBook (WS updates instantly)
+  setInterval(function() {
+    const w = getCurrentMarket();
+    if (!w) return;
+    emitFn("prices", {
+      btcUpPrice: +getPrice(w.btcUp).toFixed(3),
+      btcDnPrice: +getPrice(w.btcDn).toFixed(3),
+      ethUpPrice: +getPrice(w.ethUp).toFixed(3),
+      ethDnPrice: +getPrice(w.ethDn).toFixed(3),
+    });
+  }, 1000);
+
   log(`💰 Balance: $${state.balance.toFixed(2)}`);
 }
-function stop() { clearInterval(timer); clearInterval(pollTimer); ws?.terminate(); }
+function stop() { clearInterval(timer); ws?.terminate(); }
 module.exports = { start, stop, buildDashboardSnapshot };
