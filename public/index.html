@@ -186,6 +186,14 @@ socket.on('snapshot', function(d) {
 
 socket.on('log', function(line) { addLog(line); });
 
+// 1-second price updates
+socket.on('prices', function(p) {
+  if (p.btcUpPrice) document.getElementById('p-btc-up').textContent = p.btcUpPrice.toFixed(3);
+  if (p.btcDnPrice) document.getElementById('p-btc-dn').textContent = p.btcDnPrice.toFixed(3);
+  if (p.ethUpPrice) document.getElementById('p-eth-up').textContent = p.ethUpPrice.toFixed(3);
+  if (p.ethDnPrice) document.getElementById('p-eth-dn').textContent = p.ethDnPrice.toFixed(3);
+});
+
 function fmt(n) {
   if (!n || n === 0) return '—';
   return Number(n).toFixed(3);
