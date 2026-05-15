@@ -242,6 +242,7 @@ async function checkWindow(w) {
   const ethUp = getPrice(w.ethUp);
   const ethDn = getPrice(w.ethDn);
   if (!btcUp || !ethUp) return;
+  log(`📊 BTC↑=${btcUp.toFixed(3)} BTC↓=${btcDn.toFixed(3)} ETH↑=${ethUp.toFixed(3)} ETH↓=${ethDn.toFixed(3)} side=${wst.side || "none"}`);
 
   // Flip check
   if (wst.side === 'UP' && wst.shares > 0 && btcDn >= 0.70) {
