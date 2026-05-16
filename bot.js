@@ -14,11 +14,9 @@ const WINDOW_SIZE         = 300;
 const WINDOW_TRADE_CUTOFF = 270;
 const SHARES              = 50;
 const STARTING_BALANCE    = 1000;
-const BTC_MIN             = 0.15;  // BTC side must be >= this to trade
-const TP_GAP              = 0.02;  // close all when gap <= this
-const FLIP_LEVEL          = 0.70;  // flip when opposite BTC side crosses this
+const BTC_MIN             = 0.15;
+const FLIP_LEVEL          = 0.70;
 
-// Gap levels — each triggers one buy of 50 shares
 const GAP_LEVELS = [0.10, 0.20, 0.30];
 
 let state = { balance: STARTING_BALANCE, openTrades: [], closedTrades: [], totalPnl: 0 };
@@ -28,7 +26,6 @@ const windowState = {};
 let emitFn = () => {};
 let logFn  = () => {};
 
-// ── Persistence ───────────────────────────────────────────────────────────────
 function loadState() {
   try {
     if (fs.existsSync(TRADES_FILE)) {
@@ -64,13 +61,6 @@ function getCurrentMarket() {
   return null;
 }
 
-// windowState per window:
-// side: 'UP' | 'DOWN' | null
-// levelsHit: Set of gap level indexes triggered this round (resets after TP)
-// flips: number of flips done
-// entries: total entries taken
-// tpHits: total TP hits
-// stopped: true after 4:30
 function getWS(ts) {
   if (!windowState[ts]) {
     windowState[ts] = {
@@ -88,7 +78,6 @@ function getPrice(tid) {
   return b.bid || b.ask || 0;
 }
 
-// ── Token extraction ──────────────────────────────────────────────────────────
 function extractTokenIds(mkt) {
   if (!mkt) return null;
   let ids = mkt.clobTokenIds ?? mkt.clob_token_ids;
@@ -113,7 +102,6 @@ function extractTokenIds(mkt) {
   return null;
 }
 
-// ── Market discovery ──────────────────────────────────────────────────────────
 async function getJson(url) {
   try {
     const res = await fetch(url, { timeout: 10000 });
@@ -203,7 +191,6 @@ async function refreshMarkets() {
   } finally { discovering = false; }
 }
 
-// ── REST price polling ────────────────────────────────────────────────────────
 async function pollPrices() {
   const w = getCurrentMarket();
   if (!w) return;
@@ -220,7 +207,6 @@ async function pollPrices() {
   }));
 }
 
-// ── WebSocket ─────────────────────────────────────────────────────────────────
 let ws = null, wsReady = false;
 const pendingSubs = new Set();
 function connectWS() {
@@ -239,14 +225,12 @@ function subscribeToken(tid) {
   _sub(tid);
 }
 
-// ── Trade helpers ─────────────────────────────────────────────────────────────
 function tradeId() { return `T${Date.now().toString(36).toUpperCase()}`; }
 
 function openTradesForWindow(windowStart) {
   return state.openTrades.filter(t => t.windowStart === windowStart);
 }
 
-// ── Main trading logic ────────────────────────────────────────────────────────
 async function checkWindow(w) {
   const nowSec  = Math.floor(Date.now() / 1000);
   const elapsed = nowSec - w.windowStart;
@@ -270,29 +254,13 @@ async function checkWindow(w) {
 
   const openTrades = openTradesForWindow(w.windowStart);
 
-  // ── TP check — close ALL open trades when gap equalizes ───────────────────
   if (openTrades.length > 0) {
     const ethPrice = wst.side === 'UP' ? ethUp : ethDn;
-    const btcPrice = wst.side === 'UP' ? btcUp : btcDn;
-    const currentGap = btcPrice - ethPrice;
-
-    // Update floating pnl on all open trades
     for (const t of openTrades) {
       t.floatingPnl = +((ethPrice - t.entryPrice) * t.shares).toFixed(4);
     }
-
-    if (currentGap <= TP_GAP) {
-      log(`🎯 TP triggered — gap=${currentGap.toFixed(3)} closing ${openTrades.length} trade(s)`);
-      closeAllTrades(openTrades, ethPrice, 'TP', w, wst);
-      // Reset levels so re-entry is possible
-      wst.levelsHit = new Set();
-      wst.side = null;
-      wst.tpHits++;
-      return;
-    }
   }
 
-  // ── Flip check ────────────────────────────────────────────────────────────
   if (openTrades.length > 0) {
     if (wst.side === 'UP' && btcDn >= FLIP_LEVEL) {
       log(`🔄 FLIP UP→DOWN`);
@@ -314,7 +282,6 @@ async function checkWindow(w) {
     }
   }
 
-  // ── Entry check ───────────────────────────────────────────────────────────
   if (btcUp >= BTC_MIN && (wst.side === 'UP' || wst.side === null)) {
     if (gapUp >= GAP_LEVELS[0]) {
       wst.side = 'UP';
@@ -328,7 +295,6 @@ async function checkWindow(w) {
   }
 }
 
-// Check which gap levels should trigger and buy accordingly
 function checkLevels(w, wst, side, btcPrice, ethPrice, gap) {
   for (let i = 0; i < GAP_LEVELS.length; i++) {
     if (wst.levelsHit.has(i)) continue;
@@ -376,7 +342,6 @@ function closeAllTrades(trades, exitPrice, reason, w, wst) {
   log(`${totalPnl >= 0 ? '🟢' : '🔴'} ${reason} closed ${trades.length} trade(s) price=${exitPrice.toFixed(3)} totalPnl=$${totalPnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
 }
 
-// ── Resolution ────────────────────────────────────────────────────────────────
 async function checkResolution() {
   const nowSec = Math.floor(Date.now() / 1000);
   for (const [tsKey, w] of Object.entries(marketCache)) {
@@ -385,7 +350,6 @@ async function checkResolution() {
     if (!tradesInWindow.length) { delete marketCache[tsKey]; delete windowState[w.windowStart]; continue; }
     log(`⏰ Resolving ws=${w.windowStart}…`);
     await pollPrices();
-    const wst  = getWS(w.windowStart);
     const upPrice = getPrice(w.ethUp);
     const dnPrice = getPrice(w.ethDn);
     for (const t of tradesInWindow) {
@@ -407,7 +371,6 @@ async function checkResolution() {
   }
 }
 
-// ── Dashboard snapshot ────────────────────────────────────────────────────────
 function buildDashboardSnapshot() {
   const w      = getCurrentMarket();
   const nowSec = Math.floor(Date.now() / 1000);
@@ -451,7 +414,6 @@ function prune() {
     if (Number(key) < cws - WINDOW_SIZE * 2) delete marketCache[key];
 }
 
-// ── Main loop ─────────────────────────────────────────────────────────────────
 let timer = null;
 async function tick() {
   try {
@@ -468,7 +430,7 @@ async function tick() {
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
-  log('🚀 Polymarket ETH Gap Bot (5m) — levels=0.10/0.20/0.30 tp=0.02');
+  log('🚀 Polymarket ETH Gap Bot (5m) — levels=0.10/0.20/0.30 resolved only');
   loadState(); connectWS(); await tick();
   timer = setInterval(tick, 5000);
   setInterval(async function() {
