@@ -11,9 +11,10 @@ const CLOB_WS    = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const TRADES_FILE = path.join(__dirname, 'trades.json');
 
 const WINDOW_SIZE      = 300;
-const ENTRY_AMOUNT     = 10;    // $10 per entry
-const ENTRY_STEP       = 0.02;  // place limit every 0.02 below current
-const TP_MULTIPLIER    = 2.0;   // TP = entry price x 2
+const ENTRY_AMOUNT     = 10;
+const ENTRY_STEP       = 0.02;
+const TP_MULTIPLIER    = 2.0;
+const PRICE_THRESHOLD  = 0.50;  // only trade when price is below this
 const STARTING_BALANCE = 1000;
 
 let state = { balance: STARTING_BALANCE, openTrades: [], closedTrades: [], totalPnl: 0 };
@@ -55,7 +56,6 @@ function getPrice(tid) {
   return b.bid || b.ask || 0;
 }
 
-// ── Token extraction ──────────────────────────────────────────────────────────
 function extractTokenIds(mkt) {
   if (!mkt) return null;
   let ids = mkt.clobTokenIds ?? mkt.clob_token_ids;
@@ -142,23 +142,15 @@ async function refreshMarkets() {
       if (res) {
         marketCache[res.ts] = { windowStart: res.ts, btcUp: res.tokens.upToken, btcDn: res.tokens.dnToken, slug: res.slug };
         log(`✅ Found ts=${res.ts} | ${res.slug}`);
-        // Initialise window state when market first found
         if (!windowState[res.ts]) initWindowState(res.ts);
       }
     }
   } finally { discovering = false; }
 }
 
-// ── Window state ──────────────────────────────────────────────────────────────
-// For each window track:
-// upLevels: Map of levelPrice -> { filled, tp, shares, cost, tpHit, id }
-// dnLevels: Map of levelPrice -> { filled, tp, shares, cost, tpHit, id }
-// upBasePrice: price when window was discovered (to build levels from)
-// dnBasePrice: same for down side
-
 function initWindowState(ts) {
   windowState[ts] = {
-    upLevels: new Map(),  // key = entry price string
+    upLevels: new Map(),
     dnLevels: new Map(),
     upBasePrice: 0,
     dnBasePrice: 0,
@@ -166,7 +158,6 @@ function initWindowState(ts) {
   };
 }
 
-// ── REST price polling ────────────────────────────────────────────────────────
 async function pollPricesForWindow(w) {
   if (!w) return;
   await Promise.all([w.btcUp, w.btcDn].map(async tid => {
@@ -183,12 +174,10 @@ async function pollPricesForWindow(w) {
 }
 
 async function pollPrices() {
-  const cws = currentWindowStart();
-  const w = marketCache[cws];
+  const w = marketCache[currentWindowStart()];
   if (w) await pollPricesForWindow(w);
 }
 
-// ── WebSocket ─────────────────────────────────────────────────────────────────
 let ws = null, wsReady = false;
 const pendingSubs = new Set();
 function connectWS() {
@@ -204,12 +193,10 @@ function _sub(tid) { ws.send(JSON.stringify({ assets_ids: [tid], type: 'market' 
 
 function tradeId() { return `T${Date.now().toString(36).toUpperCase()}`; }
 
-// Round price to nearest 0.02
 function roundToStep(price) {
   return Math.round(price / ENTRY_STEP) * ENTRY_STEP;
 }
 
-// ── Main trading logic ────────────────────────────────────────────────────────
 function checkWindow(w) {
   const wst = windowState[w.windowStart];
   if (!wst || wst.resolved) return;
@@ -218,96 +205,119 @@ function checkWindow(w) {
   const dnPrice = getPrice(w.btcDn);
   if (!upPrice || !dnPrice) return;
 
-  // Set base price on first tick
-  if (!wst.upBasePrice && upPrice > 0) {
-    wst.upBasePrice = upPrice;
-    log(`📌 UP base price set: ${upPrice.toFixed(3)}`);
-  }
-  if (!wst.dnBasePrice && dnPrice > 0) {
-    wst.dnBasePrice = dnPrice;
-    log(`📌 DN base price set: ${dnPrice.toFixed(3)}`);
+  // Set base prices on first tick
+  if (!wst.upBasePrice && upPrice > 0) { wst.upBasePrice = upPrice; log(`📌 UP base: ${upPrice.toFixed(3)}`); }
+  if (!wst.dnBasePrice && dnPrice > 0) { wst.dnBasePrice = dnPrice; log(`📌 DN base: ${dnPrice.toFixed(3)}`); }
+
+  // Only run UP ladder if BTC↑ price is below 0.50
+  if (wst.upBasePrice > 0 && upPrice < PRICE_THRESHOLD) {
+    checkSide(w, wst, 'UP', upPrice);
   }
 
-  // Check UP side
-  if (wst.upBasePrice > 0) checkSide(w, wst, 'UP', upPrice);
-  // Check DN side
-  if (wst.dnBasePrice > 0) checkSide(w, wst, 'DOWN', dnPrice);
+  // Only run DN ladder if BTC↓ price is below 0.50
+  if (wst.dnBasePrice > 0 && dnPrice < PRICE_THRESHOLD) {
+    checkSide(w, wst, 'DOWN', dnPrice);
+  }
+
+  // Always check TPs regardless of price threshold
+  checkTPs(w, wst, upPrice, dnPrice);
 }
 
 function checkSide(w, wst, side, currentPrice) {
   const levels    = side === 'UP' ? wst.upLevels : wst.dnLevels;
   const basePrice = side === 'UP' ? wst.upBasePrice : wst.dnBasePrice;
-  const token     = side === 'UP' ? w.btcUp : w.btcDn;
 
-  // Generate all levels from base down to current price (every 0.02)
-  // Level price = basePrice - 0.02, basePrice - 0.04, etc.
+  // Generate levels from base - 0.02 down to current price
   let levelPrice = +(roundToStep(basePrice) - ENTRY_STEP).toFixed(3);
   while (levelPrice >= Math.max(0.02, currentPrice - ENTRY_STEP)) {
     const key = levelPrice.toFixed(3);
     if (!levels.has(key)) {
-      // New level — add it as pending
-      levels.set(key, { entryPrice: levelPrice, tp: +(levelPrice * TP_MULTIPLIER).toFixed(3), filled: false, tpHit: false, shares: 0, cost: 0, proceeds: 0, id: null });
+      levels.set(key, {
+        entryPrice: levelPrice,
+        tp: +(levelPrice * TP_MULTIPLIER).toFixed(3),
+        filled: false, tpHit: false,
+        shares: 0, cost: 0, proceeds: 0, id: null,
+      });
     }
     levelPrice = +(levelPrice - ENTRY_STEP).toFixed(3);
     if (levelPrice < 0.02) break;
   }
 
-  // Check fills — level fills when price drops TO or BELOW that level
+  // Fill levels when price drops to or below entry price
   for (const [key, lvl] of levels) {
     if (lvl.filled) continue;
     if (currentPrice <= lvl.entryPrice) {
-      // Fill this level
       const shares = ENTRY_AMOUNT / lvl.entryPrice;
-      const cost   = ENTRY_AMOUNT;
-      if (state.balance < cost) { log(`💸 Low balance`); continue; }
+      if (state.balance < ENTRY_AMOUNT) { log(`💸 Low balance`); continue; }
       lvl.filled = true;
       lvl.shares = +shares.toFixed(4);
-      lvl.cost   = cost;
+      lvl.cost   = ENTRY_AMOUNT;
       lvl.id     = tradeId();
-      state.balance -= cost;
+      state.balance -= ENTRY_AMOUNT;
       const trade = {
         id: lvl.id, windowStart: w.windowStart, side,
         entryPrice: lvl.entryPrice, tp: lvl.tp,
-        shares: lvl.shares, cost,
+        shares: lvl.shares, cost: ENTRY_AMOUNT,
         openedAt: new Date().toISOString(), floatingPnl: 0,
       };
       state.openTrades.push(trade);
       saveState();
-      log(`🟢 FILL ${side} [${lvl.id}] entry=${lvl.entryPrice.toFixed(3)} tp=${lvl.tp.toFixed(3)} shares=${lvl.shares.toFixed(2)} cost=$${cost} bal=$${state.balance.toFixed(2)}`);
+      log(`🟢 FILL ${side} [${lvl.id}] entry=${lvl.entryPrice.toFixed(3)} tp=${lvl.tp.toFixed(3)} shares=${lvl.shares.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
       emitFn('trade_entered', trade);
     }
   }
+}
 
-  // Check TPs — TP hits when price rises to or above tp price
-  for (const [key, lvl] of levels) {
+function checkTPs(w, wst, upPrice, dnPrice) {
+  // Check UP TPs
+  for (const [key, lvl] of wst.upLevels) {
     if (!lvl.filled || lvl.tpHit) continue;
-    if (currentPrice >= lvl.tp) {
+    if (upPrice >= lvl.tp) {
       lvl.tpHit    = true;
       lvl.proceeds = +(lvl.tp * lvl.shares).toFixed(2);
       const pnl    = lvl.proceeds - lvl.cost;
-      state.balance   += lvl.proceeds;
-      state.totalPnl  += pnl;
+      state.balance  += lvl.proceeds;
+      state.totalPnl += pnl;
       state.openTrades = state.openTrades.filter(t => t.id !== lvl.id);
       state.closedTrades.push({
-        id: lvl.id, windowStart: w.windowStart, side,
+        id: lvl.id, windowStart: w.windowStart, side: 'UP',
         entryPrice: lvl.entryPrice, tp: lvl.tp,
         exitPrice: lvl.tp, shares: lvl.shares, cost: lvl.cost,
         proceeds: lvl.proceeds, realizedPnl: +pnl.toFixed(4),
         closedAt: new Date().toISOString(), exitReason: 'TP',
       });
       saveState();
-      log(`🎯 TP HIT ${side} [${lvl.id}] entry=${lvl.entryPrice.toFixed(3)} tp=${lvl.tp.toFixed(3)} proceeds=$${lvl.proceeds} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
-      emitFn('trade_closed', lvl);
+      log(`🎯 TP UP [${lvl.id}] entry=${lvl.entryPrice.toFixed(3)} tp=${lvl.tp.toFixed(3)} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
     }
+    // Update floating pnl
+    const t = state.openTrades.find(t => t.id === lvl.id);
+    if (t) t.floatingPnl = +((upPrice - lvl.entryPrice) * lvl.shares).toFixed(4);
   }
-
-  // Update floating pnl on open trades
-  for (const t of state.openTrades.filter(t => t.windowStart === w.windowStart && t.side === side)) {
-    t.floatingPnl = +((currentPrice - t.entryPrice) * t.shares).toFixed(4);
+  // Check DN TPs
+  for (const [key, lvl] of wst.dnLevels) {
+    if (!lvl.filled || lvl.tpHit) continue;
+    if (dnPrice >= lvl.tp) {
+      lvl.tpHit    = true;
+      lvl.proceeds = +(lvl.tp * lvl.shares).toFixed(2);
+      const pnl    = lvl.proceeds - lvl.cost;
+      state.balance  += lvl.proceeds;
+      state.totalPnl += pnl;
+      state.openTrades = state.openTrades.filter(t => t.id !== lvl.id);
+      state.closedTrades.push({
+        id: lvl.id, windowStart: w.windowStart, side: 'DOWN',
+        entryPrice: lvl.entryPrice, tp: lvl.tp,
+        exitPrice: lvl.tp, shares: lvl.shares, cost: lvl.cost,
+        proceeds: lvl.proceeds, realizedPnl: +pnl.toFixed(4),
+        closedAt: new Date().toISOString(), exitReason: 'TP',
+      });
+      saveState();
+      log(`🎯 TP DN [${lvl.id}] entry=${lvl.entryPrice.toFixed(3)} tp=${lvl.tp.toFixed(3)} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
+    }
+    const t = state.openTrades.find(t => t.id === lvl.id);
+    if (t) t.floatingPnl = +((dnPrice - lvl.entryPrice) * lvl.shares).toFixed(4);
   }
 }
 
-// ── Resolution ────────────────────────────────────────────────────────────────
 async function checkResolution() {
   const nowSec = Math.floor(Date.now() / 1000);
   for (const [tsStr, wst] of Object.entries(windowState)) {
@@ -316,44 +326,39 @@ async function checkResolution() {
     if (nowSec < ts + WINDOW_SIZE + 30) continue;
     const w = marketCache[ts];
     if (!w) continue;
-
     log(`⏰ Resolving window ts=${ts}…`);
     await pollPricesForWindow(w);
     const upPrice = getPrice(w.btcUp);
     const dnPrice = getPrice(w.btcDn);
     log(`   Resolved: BTC↑=${upPrice.toFixed(3)} BTC↓=${dnPrice.toFixed(3)}`);
-
     const tradesInWindow = state.openTrades.filter(t => t.windowStart === ts);
     let windowPnl = 0;
-
     for (const t of tradesInWindow) {
-      const resolvedPrice = t.side === 'UP' ? upPrice : dnPrice;
-      const proceeds = resolvedPrice * t.shares;
-      const pnl = proceeds - t.cost;
-      windowPnl += pnl;
-      state.balance  += proceeds;
+      const rp  = t.side === 'UP' ? upPrice : dnPrice;
+      const pro = rp * t.shares;
+      const pnl = pro - t.cost;
+      windowPnl      += pnl;
+      state.balance  += pro;
       state.totalPnl += pnl;
       state.closedTrades.push({
-        ...t, exitPrice: resolvedPrice, proceeds: +proceeds.toFixed(2),
-        realizedPnl: +pnl.toFixed(4), closedAt: new Date().toISOString(), exitReason: 'RESOLVED',
+        ...t, exitPrice: rp, proceeds: +pro.toFixed(2),
+        realizedPnl: +pnl.toFixed(4),
+        closedAt: new Date().toISOString(), exitReason: 'RESOLVED',
       });
-      log(`${pnl >= 0 ? '🟢' : '🔴'} RESOLVED ${t.side} [${t.id}] entry=${t.entryPrice.toFixed(3)} resolved=${resolvedPrice.toFixed(3)} pnl=$${pnl.toFixed(2)}`);
+      log(`${pnl >= 0 ? '🟢' : '🔴'} RESOLVED ${t.side} [${t.id}] entry=${t.entryPrice.toFixed(3)} resolved=${rp.toFixed(3)} pnl=$${pnl.toFixed(2)}`);
     }
-
     state.openTrades = state.openTrades.filter(t => t.windowStart !== ts);
     wst.resolved = true;
     saveState();
-
-    const upFilled = [...wst.upLevels.values()].filter(l => l.filled).length;
-    const dnFilled = [...wst.dnLevels.values()].filter(l => l.filled).length;
-    const upTP     = [...wst.upLevels.values()].filter(l => l.tpHit).length;
-    const dnTP     = [...wst.dnLevels.values()].filter(l => l.tpHit).length;
-    log(`📊 SUMMARY ts=${ts} UP filled=${upFilled} tp=${upTP} | DN filled=${dnFilled} tp=${dnTP} | windowPnl=$${windowPnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
+    const upF = [...wst.upLevels.values()].filter(l => l.filled).length;
+    const dnF = [...wst.dnLevels.values()].filter(l => l.filled).length;
+    const upT = [...wst.upLevels.values()].filter(l => l.tpHit).length;
+    const dnT = [...wst.dnLevels.values()].filter(l => l.tpHit).length;
+    log(`📊 SUMMARY ts=${ts} UP filled=${upF} tp=${upT} | DN filled=${dnF} tp=${dnT} | pnl=$${windowPnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
     delete marketCache[ts];
   }
 }
 
-// ── Dashboard snapshot ────────────────────────────────────────────────────────
 function buildDashboardSnapshot() {
   const cws    = currentWindowStart();
   const nowSec = Math.floor(Date.now() / 1000);
@@ -361,18 +366,14 @@ function buildDashboardSnapshot() {
   const wst    = windowState[cws];
   const upPrice = w ? getPrice(w.btcUp) : 0;
   const dnPrice = w ? getPrice(w.btcDn) : 0;
-
-  // Build level arrays for dashboard
-  const upLevels = wst ? [...wst.upLevels.entries()].map(([k, v]) => ({
+  const upLevels = wst ? [...wst.upLevels.values()].map(v => ({
     entryPrice: v.entryPrice, tp: v.tp, filled: v.filled, tpHit: v.tpHit,
     shares: v.shares, cost: v.cost, proceeds: v.proceeds, id: v.id,
   })).sort((a, b) => b.entryPrice - a.entryPrice) : [];
-
-  const dnLevels = wst ? [...wst.dnLevels.entries()].map(([k, v]) => ({
+  const dnLevels = wst ? [...wst.dnLevels.values()].map(v => ({
     entryPrice: v.entryPrice, tp: v.tp, filled: v.filled, tpHit: v.tpHit,
     shares: v.shares, cost: v.cost, proceeds: v.proceeds, id: v.id,
   })).sort((a, b) => b.entryPrice - a.entryPrice) : [];
-
   return {
     balance:      +state.balance.toFixed(2),
     totalPnl:     +state.totalPnl.toFixed(2),
@@ -381,14 +382,15 @@ function buildDashboardSnapshot() {
     updatedAt:    new Date().toISOString(),
     window: w ? {
       windowStart: cws,
-      elapsed:   nowSec - cws,
-      remaining: Math.max(0, WINDOW_SIZE - (nowSec - cws)),
-      upPrice:   +upPrice.toFixed(3),
-      dnPrice:   +dnPrice.toFixed(3),
+      elapsed:     nowSec - cws,
+      remaining:   Math.max(0, WINDOW_SIZE - (nowSec - cws)),
+      upPrice:     +upPrice.toFixed(3),
+      dnPrice:     +dnPrice.toFixed(3),
       upBasePrice: wst?.upBasePrice ?? 0,
       dnBasePrice: wst?.dnBasePrice ?? 0,
-      upLevels,
-      dnLevels,
+      upActive:    upPrice < PRICE_THRESHOLD,
+      dnActive:    dnPrice < PRICE_THRESHOLD,
+      upLevels, dnLevels,
     } : null,
   };
 }
@@ -414,7 +416,7 @@ async function tick() {
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
-  log('🚀 BTC 5m Limit Ladder — $10/entry step=0.02 tp=2x');
+  log('🚀 BTC 5m Limit Ladder — $10/entry step=0.02 tp=2x threshold<0.50');
   loadState(); connectWS(); await tick();
   timer = setInterval(tick, 5000);
   setInterval(async function() {
