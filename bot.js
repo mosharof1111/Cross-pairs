@@ -266,18 +266,18 @@ async function checkWindow(w) {
       log(`🔄 FLIP UP→DOWN`);
       closeAllTrades(openTrades, ethUp, 'FLIP', w, wst);
       wst.levelsHit = new Set();
-      wst.side = 'DOWN';
+      wst.side = null;
       wst.flips++;
-      checkLevels(w, wst, 'DOWN', btcDn, ethDn, gapDn);
+      if (gapDn >= GAP_LEVELS[0]) { wst.side = 'DOWN'; checkLevels(w, wst, 'DOWN', btcDn, ethDn, gapDn); }
       return;
     }
     if (wst.side === 'DOWN' && btcUp >= FLIP_LEVEL) {
       log(`🔄 FLIP DOWN→UP`);
       closeAllTrades(openTrades, ethDn, 'FLIP', w, wst);
       wst.levelsHit = new Set();
-      wst.side = 'UP';
+      wst.side = null;
       wst.flips++;
-      checkLevels(w, wst, 'UP', btcUp, ethUp, gapUp);
+      if (gapUp >= GAP_LEVELS[0]) { wst.side = 'UP'; checkLevels(w, wst, 'UP', btcUp, ethUp, gapUp); }
       return;
     }
   }
