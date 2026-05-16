@@ -59,7 +59,7 @@ function currentWindowStart() {
 function getCurrentMarket() {
   const cws = currentWindowStart();
   if (marketCache[cws]) return marketCache[cws];
-  for (const offset of [1, -1, 2, -2]) {
+  for (const offset of [-1, -2]) {
     const ts = cws + offset * WINDOW_SIZE;
     if (marketCache[ts]) return marketCache[ts];
   }
