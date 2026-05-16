@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>BTC PRE-MARKET LADDER</title>
+<title>BTC LIMIT LADDER</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Bebas+Neue&display=swap" rel="stylesheet"/>
 <script src="/socket.io/socket.io.js"></script>
 <style>
@@ -28,61 +28,67 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
 .ph h3{font-size:9px;font-weight:700;letter-spacing:2px;color:var(--dim2);text-transform:uppercase;}
 .ph .badge{font-size:10px;color:var(--cyan);font-weight:700;}
 .wb{padding:14px;}
-.win-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
-@media(max-width:600px){.win-grid{grid-template-columns:1fr;}}
-.wcard{border-radius:5px;border:1px solid var(--border);overflow:hidden;}
-.wcard.live{border-color:var(--green);}
-.wcard.pre{border-color:var(--amber);}
-.wcard-head{padding:8px 12px;display:flex;justify-content:space-between;align-items:center;font-size:9px;font-weight:700;letter-spacing:1.5px;}
-.wcard.live .wcard-head{background:rgba(0,230,118,0.08);color:var(--green);}
-.wcard.pre .wcard-head{background:rgba(255,179,0,0.08);color:var(--amber);}
-.wcard-body{padding:10px 12px;}
-.big-timer{font-family:'Bebas Neue';font-size:40px;letter-spacing:2px;line-height:1;margin-bottom:6px;}
+.timer-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.big-timer{font-family:'Bebas Neue';font-size:48px;letter-spacing:2px;line-height:1;}
 .big-timer.g{color:var(--green);}
 .big-timer.a{color:var(--amber);}
 .big-timer.r{color:var(--red);}
 .big-timer.d{color:var(--dim2);}
-.prog-wrap{height:3px;background:var(--border);border-radius:2px;margin-bottom:10px;overflow:hidden;}
+.prog-wrap{height:3px;background:var(--border);border-radius:2px;margin-bottom:12px;overflow:hidden;}
 .prog{height:100%;border-radius:2px;}
 .prog.ok{background:linear-gradient(90deg,var(--green),var(--cyan));}
 .prog.warn{background:linear-gradient(90deg,var(--amber),var(--red));}
-.price-row{display:flex;gap:8px;margin-bottom:10px;}
-.pcell{flex:1;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:4px;padding:8px 10px;}
-.pcell label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:4px;}
-.pcell .pval{font-size:20px;font-weight:700;}
+.price-row{display:flex;gap:8px;margin-bottom:12px;}
+.pcell{flex:1;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:4px;padding:10px 12px;}
+.pcell label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:5px;}
+.pcell .pval{font-size:26px;font-weight:700;}
 .pcell .pval.up{color:var(--green);}
 .pcell .pval.dn{color:var(--red);}
-.pcell .psub{font-size:9px;color:var(--dim2);margin-top:2px;}
-.ladder-wrap{margin-top:8px;}
-.ladder-title{font-size:9px;color:var(--dim2);letter-spacing:1px;margin-bottom:5px;font-weight:700;}
-.ladder-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;margin-bottom:6px;}
-.lrung{border-radius:3px;padding:5px 3px;text-align:center;border:1px solid var(--border);font-size:9px;font-weight:700;color:var(--dim2);transition:all .3s;}
-.lrung.sold{border-color:var(--green);background:rgba(0,230,118,0.12);color:var(--green);}
-.lrung.pending{border-color:var(--amber);background:rgba(255,179,0,0.06);color:var(--amber);}
-.lrung label{display:block;font-size:7px;color:inherit;margin-bottom:2px;opacity:.7;}
-.ladder-bar{display:flex;gap:4px;align-items:center;margin-bottom:4px;}
-.lbar-fill{height:6px;background:var(--green);border-radius:3px;transition:width .5s;}
-.lbar-bg{flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden;}
-.lbar-text{font-size:9px;color:var(--dim2);white-space:nowrap;}
-.sbar{display:grid;gap:1px;background:var(--border);}
+.pcell .psub{font-size:9px;color:var(--dim2);margin-top:3px;}
+/* Two column ladder layout */
+.ladder-cols{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+@media(max-width:500px){.ladder-cols{grid-template-columns:1fr;}}
+.ladder-side{border-radius:4px;border:1px solid var(--border);overflow:hidden;}
+.ls-head{padding:7px 10px;font-size:9px;font-weight:700;letter-spacing:1px;display:flex;justify-content:space-between;}
+.ls-head.up{background:rgba(0,230,118,0.08);color:var(--green);}
+.ls-head.dn{background:rgba(255,61,90,0.08);color:var(--red);}
+.ls-body{max-height:280px;overflow-y:auto;}
+.ls-body::-webkit-scrollbar{width:3px;}
+.ls-body::-webkit-scrollbar-thumb{background:var(--border);}
+.level-row{display:flex;align-items:center;padding:5px 10px;border-bottom:1px solid rgba(28,42,58,0.4);font-size:10px;gap:6px;}
+.level-row:last-child{border-bottom:none;}
+.level-row.pending{color:var(--dim2);}
+.level-row.filled{background:rgba(255,179,0,0.04);}
+.level-row.tp-hit{background:rgba(0,230,118,0.06);}
+.lv-price{font-weight:700;width:46px;}
+.lv-tp{color:var(--dim2);width:46px;}
+.lv-status{flex:1;font-size:9px;}
+.lv-pnl{text-align:right;font-weight:700;min-width:50px;}
+.dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+.dot.pending{background:var(--dim);}
+.dot.filled{background:var(--amber);}
+.dot.tp{background:var(--green);}
+/* Stats */
+.sbar{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border);}
+.sbar6{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--border);}
 .sbi{background:var(--panel2);padding:8px;text-align:center;}
 .sbi label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:3px;}
-.sbi value{display:block;font-size:15px;font-weight:700;}
+.sbi value{display:block;font-size:14px;font-weight:700;}
+/* Table */
 .tt{width:100%;border-collapse:collapse;}
-.tt th{padding:6px 10px;font-size:8px;color:var(--dim2);letter-spacing:1.5px;border-bottom:1px solid var(--border);text-align:left;}
-.tt td{padding:6px 10px;border-bottom:1px solid rgba(28,42,58,0.5);font-size:11px;}
+.tt th{padding:5px 8px;font-size:8px;color:var(--dim2);letter-spacing:1px;border-bottom:1px solid var(--border);text-align:left;}
+.tt td{padding:5px 8px;border-bottom:1px solid rgba(28,42,58,0.4);font-size:10px;}
 .tt tr:last-child td{border-bottom:none;}
-.tt tr:hover td{background:rgba(255,255,255,0.02);}
 .pos{color:var(--green);font-weight:700;}
 .neg{color:var(--red);font-weight:700;}
 .empty{padding:20px;text-align:center;color:var(--dim2);}
-#logb{height:160px;overflow-y:auto;padding:8px 12px;}
+#logb{height:150px;overflow-y:auto;padding:8px 12px;}
 #logb::-webkit-scrollbar{width:3px;}
 #logb::-webkit-scrollbar-thumb{background:var(--border);}
 .ll{padding:2px 0;line-height:1.6;font-size:11px;color:var(--dim2);}
-.ll.buy{color:var(--cyan);}
-.ll.sell{color:var(--green);}
-.ll.res{color:var(--amber);}
+.ll.fill{color:var(--amber);}
+.ll.tp{color:var(--green);}
+.ll.res{color:var(--cyan);}
 .ll.err{color:var(--red);}
 .ll.inf{color:var(--text);}
 </style>
@@ -90,204 +96,236 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
 <body>
 <header>
   <div>
-    <div class="brand">BTC <em>PRE-MARKET</em> LADDER</div>
-    <div class="sub">BUY 100 EACH SIDE PRE-MARKET · SELL LADDER 10 SHARES × 0.04 STEP · RESOLVE AT WINDOW END</div>
+    <div class="brand">BTC <em>LIMIT</em> LADDER</div>
+    <div class="sub">$10/ENTRY · STEP 0.02 · TP = ENTRY × 2 · UNLIMITED LEVELS</div>
   </div>
   <div class="hstats">
     <div class="hstat"><label>BALANCE</label><div class="val" id="h-bal">$—</div></div>
     <div class="hstat"><label>TOTAL P&L</label><div class="val" id="h-pnl">+$0.00</div></div>
+    <div class="hstat"><label>OPEN</label><div class="val" id="h-open">0</div></div>
     <div class="hstat"><label>WS</label><div class="wsdot off" id="wsdot"></div></div>
   </div>
 </header>
 <main>
+
+  <!-- Window -->
   <div class="panel">
-    <div class="ph"><h3>Windows</h3><div class="badge" id="w-upd">—</div></div>
+    <div class="ph"><h3>Live Window</h3><div class="badge" id="w-ts">Searching…</div></div>
     <div class="wb">
-      <div class="win-grid">
-        <div class="wcard live">
-          <div class="wcard-head"><span>🟢 LIVE WINDOW</span><span id="cur-ts">—</span></div>
-          <div class="wcard-body">
-            <div class="big-timer d" id="cur-timer">—:——</div>
-            <div class="prog-wrap"><div class="prog ok" id="cur-prog" style="width:0%"></div></div>
-            <div class="price-row">
-              <div class="pcell"><label>BTC ↑ UP</label><div class="pval up" id="cur-up">—</div></div>
-              <div class="pcell"><label>BTC ↓ DOWN</label><div class="pval dn" id="cur-dn">—</div></div>
-            </div>
-            <div id="cur-ladder"></div>
-          </div>
+      <div class="timer-row">
+        <div class="big-timer d" id="timer">—:——</div>
+        <div style="text-align:right;font-size:10px;color:var(--dim2)">Elapsed: <span id="w-el">—</span>s<br>Updated: <span id="w-upd">—</span></div>
+      </div>
+      <div class="prog-wrap"><div class="prog ok" id="prog" style="width:0%"></div></div>
+      <div class="price-row">
+        <div class="pcell">
+          <label>BTC ↑ UP</label>
+          <div class="pval up" id="p-up">—</div>
+          <div class="psub" id="sub-up">Base: —</div>
         </div>
-        <div class="wcard pre">
-          <div class="wcard-head"><span>⏳ PRE-MARKET</span><span id="nxt-ts">—</span></div>
-          <div class="wcard-body">
-            <div class="price-row">
-              <div class="pcell"><label>BTC ↑ UP</label><div class="pval up" id="nxt-up">—</div><div class="psub" id="nxt-up-entry"></div></div>
-              <div class="pcell"><label>BTC ↓ DOWN</label><div class="pval dn" id="nxt-dn">—</div><div class="psub" id="nxt-dn-entry"></div></div>
-            </div>
-            <div id="nxt-status" style="font-size:10px;color:var(--amber);margin-bottom:6px">Waiting for discovery…</div>
-            <div id="nxt-ladder"></div>
+        <div class="pcell">
+          <label>BTC ↓ DOWN</label>
+          <div class="pval dn" id="p-dn">—</div>
+          <div class="psub" id="sub-dn">Base: —</div>
+        </div>
+      </div>
+      <div class="ladder-cols">
+        <div class="ladder-side">
+          <div class="ls-head up">
+            <span>↑ UP LADDER</span>
+            <span id="up-summary">0 filled · 0 TP</span>
           </div>
+          <div class="ls-body" id="up-levels"></div>
+        </div>
+        <div class="ladder-side">
+          <div class="ls-head dn">
+            <span>↓ DOWN LADDER</span>
+            <span id="dn-summary">0 filled · 0 TP</span>
+          </div>
+          <div class="ls-body" id="dn-levels"></div>
         </div>
       </div>
     </div>
   </div>
+
+  <!-- Stats -->
   <div class="panel">
     <div class="ph"><h3>Session Stats</h3></div>
-    <div class="sbar" style="grid-template-columns:repeat(6,1fr)">
-      <div class="sbi"><label>WINDOWS</label><value id="st-win">0</value></div>
-      <div class="sbi"><label>LADDER HITS</label><value id="st-hits" style="color:var(--green)">0</value></div>
-      <div class="sbi"><label>TOTAL PROFIT</label><value id="st-profit" style="color:var(--green)">$0</value></div>
-      <div class="sbi"><label>TOTAL LOSS</label><value id="st-loss" style="color:var(--red)">$0</value></div>
+    <div class="sbar6">
+      <div class="sbi"><label>FILLS</label><value id="st-fills">0</value></div>
+      <div class="sbi"><label>TP HITS</label><value id="st-tp" style="color:var(--green)">0</value></div>
+      <div class="sbi"><label>PROFIT</label><value id="st-profit" style="color:var(--green)">$0</value></div>
+      <div class="sbi"><label>LOSS</label><value id="st-loss" style="color:var(--red)">$0</value></div>
       <div class="sbi"><label>NET P&L</label><value id="st-pnl">$0</value></div>
       <div class="sbi"><label>BALANCE</label><value id="st-bal" style="color:var(--cyan)">$—</value></div>
     </div>
   </div>
+
+  <!-- Open trades -->
   <div class="panel">
-    <div class="ph"><h3>Closed Windows</h3><div class="badge" id="cc">0</div></div>
-    <div id="closed-t"><div class="empty">No closed windows yet</div></div>
+    <div class="ph"><h3>Open Trades</h3><div class="badge" id="oc">0</div></div>
+    <div id="open-t"><div class="empty">No open trades</div></div>
   </div>
+
+  <!-- Closed trades -->
+  <div class="panel">
+    <div class="ph"><h3>Closed Trades</h3><div class="badge" id="cc">0</div></div>
+    <div id="closed-t"><div class="empty">No closed trades yet</div></div>
+  </div>
+
+  <!-- Log -->
   <div class="panel">
     <div class="ph"><h3>System Log</h3><div class="badge" id="lc">0</div></div>
     <div id="logb"></div>
   </div>
+
 </main>
 <script>
 var socket = io();
 var logCount = 0;
+var lastSnap = null;
 
 socket.on('connect',    function(){ document.getElementById('wsdot').classList.remove('off'); });
 socket.on('disconnect', function(){ document.getElementById('wsdot').classList.add('off'); });
 
 socket.on('prices', function(p) {
-  set('cur-up', fmt(p.curUp));
-  set('cur-dn', fmt(p.curDn));
-  set('nxt-up', fmt(p.nextUp));
-  set('nxt-dn', fmt(p.nextDn));
+  set('p-up', p.upPrice > 0 ? p.upPrice.toFixed(3) : '—');
+  set('p-dn', p.dnPrice > 0 ? p.dnPrice.toFixed(3) : '—');
   set('w-upd', new Date().toLocaleTimeString());
+  if (lastSnap && lastSnap.window) {
+    renderLevels(lastSnap.window.upLevels, 'up-levels', 'up-summary', p.upPrice, 'UP');
+    renderLevels(lastSnap.window.dnLevels, 'dn-levels', 'dn-summary', p.dnPrice, 'DOWN');
+  }
 });
 
 socket.on('snapshot', function(d) {
+  lastSnap = d;
   set('h-bal', '$' + d.balance.toFixed(2));
   set('st-bal', '$' + d.balance.toFixed(2));
+  set('h-open', d.openTrades.length);
+  set('oc', d.openTrades.length);
+  set('cc', d.closedTrades.length);
   var pe = document.getElementById('h-pnl');
   pe.textContent = (d.totalPnl >= 0 ? '+$' : '-$') + Math.abs(d.totalPnl).toFixed(2);
   pe.className = 'val' + (d.totalPnl > 0 ? ' pos' : d.totalPnl < 0 ? ' neg' : '');
-  set('cc', d.closedTrades.length);
+
   var cl = d.closedTrades;
-  set('st-win', cl.length);
-  var totalHits = cl.reduce(function(s,t){ return s + (t.ladderUpHits||0) + (t.ladderDnHits||0); }, 0);
-  set('st-hits', totalHits);
-  var totalProfit = cl.filter(function(t){return (t.totalPnl||0)>0;}).reduce(function(s,t){return s+(t.totalPnl||0);},0);
-  var totalLoss   = cl.filter(function(t){return (t.totalPnl||0)<0;}).reduce(function(s,t){return s+(t.totalPnl||0);},0);
-  set('st-profit', '+$' + totalProfit.toFixed(2));
-  set('st-loss',   '-$' + Math.abs(totalLoss).toFixed(2));
-  var stPnl = document.getElementById('st-pnl');
-  stPnl.textContent = (d.totalPnl >= 0 ? '+$' : '-$') + Math.abs(d.totalPnl).toFixed(2);
-  stPnl.style.color = d.totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
-  if (d.current) renderCurrentWindow(d.current);
-  if (d.next)    renderNextWindow(d.next);
+  var totalFills = cl.length + d.openTrades.length;
+  var totalTP    = cl.filter(function(t){return t.exitReason==='TP';}).length;
+  var profit     = cl.filter(function(t){return (t.realizedPnl||0)>0;}).reduce(function(s,t){return s+(t.realizedPnl||0);},0);
+  var loss       = cl.filter(function(t){return (t.realizedPnl||0)<0;}).reduce(function(s,t){return s+(t.realizedPnl||0);},0);
+  set('st-fills', totalFills);
+  set('st-tp', totalTP);
+  set('st-profit', '+$' + profit.toFixed(2));
+  set('st-loss', '-$' + Math.abs(loss).toFixed(2));
+  var spnl = document.getElementById('st-pnl');
+  spnl.textContent = (d.totalPnl >= 0 ? '+$' : '-$') + Math.abs(d.totalPnl).toFixed(2);
+  spnl.style.color = d.totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+
+  if (d.window) renderWindow(d.window);
+  renderOpen(d.openTrades);
   renderClosed(d.closedTrades);
 });
 
 socket.on('log', function(line){ addLog(line); });
 
-function fmt(n){ return (n !== null && n !== undefined && n > 0) ? Number(n).toFixed(3) : '—'; }
 function set(id, v){ var e = document.getElementById(id); if(e) e.textContent = v; }
 
-function renderCurrentWindow(c) {
-  set('cur-ts', 'ws:' + c.windowStart);
-  var rem = c.remaining || 0;
+function renderWindow(w) {
+  set('w-ts', 'ws:' + w.windowStart);
+  var rem = w.remaining || 0;
   var m = Math.floor(rem/60), s = rem%60;
-  var te = document.getElementById('cur-timer');
+  var te = document.getElementById('timer');
   te.textContent = m + ':' + (s<10?'0':'') + s;
   te.className = 'big-timer ' + (rem > 120 ? 'g' : rem > 30 ? 'a' : 'r');
-  var pct = Math.min(100, (c.elapsed/300)*100);
-  var pb = document.getElementById('cur-prog');
+  var pct = Math.min(100, (w.elapsed/300)*100);
+  var pb = document.getElementById('prog');
   pb.style.width = pct + '%';
   pb.className = 'prog ' + (pct > 80 ? 'warn' : 'ok');
-  set('cur-up', fmt(c.btcUpPrice));
-  set('cur-dn', fmt(c.btcDnPrice));
-  if (c.wst) renderLadder('cur-ladder', c.wst, c.btcUpPrice, c.btcDnPrice);
-  else document.getElementById('cur-ladder').innerHTML = '<div style="color:var(--dim2);font-size:10px;padding:6px 0">No position this window</div>';
+  set('p-up', w.upPrice > 0 ? w.upPrice.toFixed(3) : '—');
+  set('p-dn', w.dnPrice > 0 ? w.dnPrice.toFixed(3) : '—');
+  set('sub-up', 'Base: ' + (w.upBasePrice > 0 ? w.upBasePrice.toFixed(3) : '—'));
+  set('sub-dn', 'Base: ' + (w.dnBasePrice > 0 ? w.dnBasePrice.toFixed(3) : '—'));
+  set('w-el', w.elapsed);
+  renderLevels(w.upLevels, 'up-levels', 'up-summary', w.upPrice, 'UP');
+  renderLevels(w.dnLevels, 'dn-levels', 'dn-summary', w.dnPrice, 'DOWN');
 }
 
-function renderNextWindow(n) {
-  set('nxt-ts', 'ws:' + n.windowStart);
-  set('nxt-up', fmt(n.btcUpPrice));
-  set('nxt-dn', fmt(n.btcDnPrice));
-  if (n.bought) {
-    set('nxt-up-entry', n.entryUp ? 'Entry: ' + n.entryUp.toFixed(3) : '');
-    set('nxt-dn-entry', n.entryDn ? 'Entry: ' + n.entryDn.toFixed(3) : '');
-    document.getElementById('nxt-status').innerHTML = '<span style="color:var(--green)">✅ BOUGHT 100 each side</span>';
-    if (n.ladderUp && n.ladderDn) {
-      renderLadder('nxt-ladder', { ladderUp: n.ladderUp, ladderDn: n.ladderDn, entryUp: n.entryUp, entryDn: n.entryDn, remainingUp: 100, remainingDn: 100 }, n.btcUpPrice, n.btcDnPrice);
-    }
-  } else {
-    set('nxt-up-entry', '');
-    set('nxt-dn-entry', '');
-    document.getElementById('nxt-status').textContent = '⏳ Searching…';
-    document.getElementById('nxt-ladder').innerHTML = '';
-  }
-}
-
-function renderLadder(containerId, wst, curUp, curDn) {
+function renderLevels(levels, containerId, summaryId, curPrice, side) {
   var el = document.getElementById(containerId);
-  if (!wst || !wst.ladderUp || !wst.ladderDn) { el.innerHTML = ''; return; }
-  var upSold = wst.ladderUp.filter(function(r){return r.sold;}).length;
-  var dnSold = wst.ladderDn.filter(function(r){return r.sold;}).length;
-  var html = '';
-  html += '<div class="ladder-wrap">';
-  html += '<div class="ladder-title">BTC ↑ SELL LADDER — ' + upSold + '/10 FILLED</div>';
-  html += '<div class="ladder-bar"><div class="lbar-bg"><div class="lbar-fill" style="width:' + (upSold*10) + '%"></div></div><span class="lbar-text">' + (wst.remainingUp||0) + ' shares left</span></div>';
-  html += '<div class="ladder-grid">';
-  wst.ladderUp.forEach(function(r) {
-    var isPending = !r.sold && curUp > 0 && curUp >= r.sellPrice * 0.97;
-    html += '<div class="lrung ' + (r.sold ? 'sold' : isPending ? 'pending' : '') + '">';
-    html += '<label>L' + r.level + '</label>';
-    html += r.sellPrice.toFixed(3);
-    if (r.sold) html += '<br>$' + r.proceeds.toFixed(2);
-    html += '</div>';
-  });
-  html += '</div></div>';
-  html += '<div class="ladder-wrap">';
-  html += '<div class="ladder-title">BTC ↓ SELL LADDER — ' + dnSold + '/10 FILLED</div>';
-  html += '<div class="ladder-bar"><div class="lbar-bg"><div class="lbar-fill" style="width:' + (dnSold*10) + '%"></div></div><span class="lbar-text">' + (wst.remainingDn||0) + ' shares left</span></div>';
-  html += '<div class="ladder-grid">';
-  wst.ladderDn.forEach(function(r) {
-    var isPending = !r.sold && curDn > 0 && curDn >= r.sellPrice * 0.97;
-    html += '<div class="lrung ' + (r.sold ? 'sold' : isPending ? 'pending' : '') + '">';
-    html += '<label>L' + r.level + '</label>';
-    html += r.sellPrice.toFixed(3);
-    if (r.sold) html += '<br>$' + r.proceeds.toFixed(2);
-    html += '</div>';
-  });
-  html += '</div></div>';
+  if (!levels || !levels.length) {
+    el.innerHTML = '<div class="empty" style="padding:12px">Waiting for price…</div>';
+    set(summaryId, '0 filled · 0 TP');
+    return;
+  }
+  var filled = levels.filter(function(l){return l.filled;}).length;
+  var tpHit  = levels.filter(function(l){return l.tpHit;}).length;
+  set(summaryId, filled + ' filled · ' + tpHit + ' TP');
+
+  var html = levels.map(function(l) {
+    var cls = l.tpHit ? 'tp-hit' : l.filled ? 'filled' : 'pending';
+    var dotCls = l.tpHit ? 'tp' : l.filled ? 'filled' : 'pending';
+    var pnl = l.tpHit ? (l.proceeds - l.cost) : (l.filled && curPrice > 0 ? (curPrice - l.entryPrice) * l.shares : 0);
+    var isNext = !l.filled && curPrice > 0 && curPrice <= l.entryPrice + 0.02 && curPrice > l.entryPrice;
+    return '<div class="level-row ' + cls + (isNext ? '" style="border-left:2px solid var(--amber)' : '') + '">' +
+      '<div class="dot ' + dotCls + '"></div>' +
+      '<div class="lv-price">' + l.entryPrice.toFixed(3) + '</div>' +
+      '<div class="lv-tp" style="color:var(--dim2)">→' + l.tp.toFixed(3) + '</div>' +
+      '<div class="lv-status">' +
+        (l.tpHit ? '<span style="color:var(--green)">✓ TP HIT</span>' :
+         l.filled ? '<span style="color:var(--amber)">OPEN</span>' :
+         isNext ? '<span style="color:var(--amber)">NEXT</span>' :
+         '<span style="color:var(--dim)">pending</span>') +
+      '</div>' +
+      '<div class="lv-pnl ' + (pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '') + '">' +
+        (l.filled || l.tpHit ? (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2) : '') +
+      '</div>' +
+      '</div>';
+  }).join('');
   el.innerHTML = html;
+}
+
+function renderOpen(trades) {
+  var el = document.getElementById('open-t');
+  if (!trades.length) { el.innerHTML = '<div class="empty">No open trades</div>'; return; }
+  var rows = trades.map(function(t) {
+    var pnl = t.floatingPnl || 0;
+    return '<tr>' +
+      '<td style="color:var(--cyan);font-size:9px">' + t.id + '</td>' +
+      '<td class="' + (t.side==='UP'?'pos':'neg') + '">' + t.side + '</td>' +
+      '<td>' + t.entryPrice.toFixed(3) + '</td>' +
+      '<td style="color:var(--amber)">' + t.tp.toFixed(3) + '</td>' +
+      '<td>' + t.shares.toFixed(2) + '</td>' +
+      '<td>$' + t.cost.toFixed(2) + '</td>' +
+      '<td class="' + (pnl>=0?'pos':'neg') + '">' + (pnl>=0?'+':'') + '$' + pnl.toFixed(2) + '</td>' +
+      '</tr>';
+  }).join('');
+  el.innerHTML = '<table class="tt"><thead><tr><th>ID</th><th>SIDE</th><th>ENTRY</th><th>TP</th><th>SHARES</th><th>COST</th><th>FLOAT</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
 function renderClosed(trades) {
   var el = document.getElementById('closed-t');
-  if (!trades.length) { el.innerHTML = '<div class="empty">No closed windows yet</div>'; return; }
+  if (!trades.length) { el.innerHTML = '<div class="empty">No closed trades yet</div>'; return; }
   var rows = trades.slice().reverse().map(function(t) {
-    var pnl = t.totalPnl || 0;
+    var pnl = t.realizedPnl || 0;
+    var rsn = t.exitReason || '—';
     return '<tr>' +
-      '<td style="color:var(--cyan);font-size:10px">W' + t.windowStart + '</td>' +
-      '<td>' + (t.entryUp ? t.entryUp.toFixed(3) : '—') + '</td>' +
-      '<td>' + (t.entryDn ? t.entryDn.toFixed(3) : '—') + '</td>' +
-      '<td>' + (t.resolvedUpPrice ? t.resolvedUpPrice.toFixed(3) : '—') + '</td>' +
-      '<td>' + (t.resolvedDnPrice ? t.resolvedDnPrice.toFixed(3) : '—') + '</td>' +
-      '<td style="color:var(--green)">' + (t.ladderUpHits||0) + '/10</td>' +
-      '<td style="color:var(--red)">' + (t.ladderDnHits||0) + '/10</td>' +
+      '<td style="color:var(--cyan);font-size:9px">' + t.id + '</td>' +
+      '<td class="' + (t.side==='UP'?'pos':'neg') + '">' + t.side + '</td>' +
+      '<td>' + t.entryPrice.toFixed(3) + '</td>' +
+      '<td>' + (t.exitPrice ? t.exitPrice.toFixed(3) : '—') + '</td>' +
+      '<td style="color:' + (rsn==='TP'?'var(--green)':rsn==='RESOLVED'?'var(--cyan)':'var(--dim2)') + ';font-size:9px">' + rsn + '</td>' +
       '<td class="' + (pnl>=0?'pos':'neg') + '">' + (pnl>=0?'+':'') + '$' + pnl.toFixed(2) + '</td>' +
       '</tr>';
   }).join('');
-  el.innerHTML = '<table class="tt"><thead><tr><th>WINDOW</th><th>ENTRY↑</th><th>ENTRY↓</th><th>RESOLVED↑</th><th>RESOLVED↓</th><th>UP HITS</th><th>DN HITS</th><th>P&L</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  el.innerHTML = '<table class="tt"><thead><tr><th>ID</th><th>SIDE</th><th>ENTRY</th><th>EXIT</th><th>REASON</th><th>P&L</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
 function addLog(line) {
   var el = document.createElement('div');
   var c = 'll';
-  if (line.indexOf('PRE-BUY') >= 0 || line.indexOf('Ladder') >= 0) c += ' buy';
-  else if (line.indexOf('SELL') >= 0) c += ' sell';
+  if (line.indexOf('FILL') >= 0) c += ' fill';
+  else if (line.indexOf('TP HIT') >= 0 || line.indexOf('🎯') >= 0) c += ' tp';
   else if (line.indexOf('RESOLVED') >= 0 || line.indexOf('SUMMARY') >= 0) c += ' res';
   else if (line.indexOf('⚠️') >= 0) c += ' err';
   else if (line.indexOf('✅') >= 0 || line.indexOf('🚀') >= 0) c += ' inf';
