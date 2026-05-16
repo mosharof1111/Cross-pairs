@@ -14,10 +14,8 @@ const WINDOW_SIZE         = 300;
 const WINDOW_TRADE_CUTOFF = 270;
 const SHARES              = 50;
 const STARTING_BALANCE    = 1000;
-const BTC_MIN             = 0.15;
-const FLIP_LEVEL          = 0.70;
-
-const GAP_LEVELS = [0.10, 0.20, 0.30];
+const BTC_MIN             = 0.55;   // BTC side must be > this
+const GAP_LEVELS          = [0.10, 0.20, 0.30];
 
 let state = { balance: STARTING_BALANCE, openTrades: [], closedTrades: [], totalPnl: 0 };
 const priceBook   = {};
@@ -61,11 +59,14 @@ function getCurrentMarket() {
   return null;
 }
 
+// Per window, track levels hit separately for UP and DOWN
 function getWS(ts) {
   if (!windowState[ts]) {
     windowState[ts] = {
-      side: null, levelsHit: new Set(),
-      flips: 0, entries: 0, tpHits: 0, stopped: false,
+      upLevelsHit: new Set(),
+      dnLevelsHit: new Set(),
+      entries: 0,
+      stopped: false,
     };
   }
   return windowState[ts];
@@ -250,56 +251,32 @@ async function checkWindow(w) {
   const gapUp = btcUp - ethUp;
   const gapDn = btcDn - ethDn;
 
-  log(`📊 BTC↑=${btcUp.toFixed(3)} BTC↓=${btcDn.toFixed(3)} ETH↑=${ethUp.toFixed(3)} ETH↓=${ethDn.toFixed(3)} gapUp=${gapUp.toFixed(3)} gapDn=${gapDn.toFixed(3)} side=${wst.side||'none'}`);
+  log(`📊 BTC↑=${btcUp.toFixed(3)} BTC↓=${btcDn.toFixed(3)} ETH↑=${ethUp.toFixed(3)} ETH↓=${ethDn.toFixed(3)} gapUp=${gapUp.toFixed(3)} gapDn=${gapDn.toFixed(3)}`);
 
+  // Update floating pnl
   const openTrades = openTradesForWindow(w.windowStart);
+  for (const t of openTrades) {
+    const curPrice = t.side === 'UP' ? ethUp : ethDn;
+    t.floatingPnl = +((curPrice - t.entryPrice) * t.shares).toFixed(4);
+  }
 
-  if (openTrades.length > 0) {
-    const ethPrice = wst.side === 'UP' ? ethUp : ethDn;
-    for (const t of openTrades) {
-      t.floatingPnl = +((ethPrice - t.entryPrice) * t.shares).toFixed(4);
+  // ── ETH↑ side — BTC↑ > 0.55 and gap positive ─────────────────────────────
+  if (btcUp > BTC_MIN) {
+    for (let i = 0; i < GAP_LEVELS.length; i++) {
+      if (wst.upLevelsHit.has(i)) continue;
+      if (gapUp >= GAP_LEVELS[i]) {
+        enterTrade(w, wst, 'UP', ethUp, i);
+      }
     }
   }
 
-  if (openTrades.length > 0) {
-    if (wst.side === 'UP' && btcDn >= FLIP_LEVEL) {
-      log(`🔄 FLIP UP→DOWN`);
-      closeAllTrades(openTrades, ethUp, 'FLIP', w, wst);
-      wst.levelsHit = new Set();
-      wst.side = null;
-      wst.flips++;
-      if (gapDn >= GAP_LEVELS[0]) { wst.side = 'DOWN'; checkLevels(w, wst, 'DOWN', btcDn, ethDn, gapDn); }
-      return;
-    }
-    if (wst.side === 'DOWN' && btcUp >= FLIP_LEVEL) {
-      log(`🔄 FLIP DOWN→UP`);
-      closeAllTrades(openTrades, ethDn, 'FLIP', w, wst);
-      wst.levelsHit = new Set();
-      wst.side = null;
-      wst.flips++;
-      if (gapUp >= GAP_LEVELS[0]) { wst.side = 'UP'; checkLevels(w, wst, 'UP', btcUp, ethUp, gapUp); }
-      return;
-    }
-  }
-
-  if (btcUp >= BTC_MIN && (wst.side === 'UP' || wst.side === null)) {
-    if (gapUp >= GAP_LEVELS[0]) {
-      wst.side = 'UP';
-      checkLevels(w, wst, 'UP', btcUp, ethUp, gapUp);
-    }
-  } else if (btcDn >= BTC_MIN && (wst.side === 'DOWN' || wst.side === null)) {
-    if (gapDn >= GAP_LEVELS[0]) {
-      wst.side = 'DOWN';
-      checkLevels(w, wst, 'DOWN', btcDn, ethDn, gapDn);
-    }
-  }
-}
-
-function checkLevels(w, wst, side, btcPrice, ethPrice, gap) {
-  for (let i = 0; i < GAP_LEVELS.length; i++) {
-    if (wst.levelsHit.has(i)) continue;
-    if (gap >= GAP_LEVELS[i]) {
-      enterTrade(w, wst, side, ethPrice, i);
+  // ── ETH↓ side — BTC↓ > 0.55 and gap positive ─────────────────────────────
+  if (btcDn > BTC_MIN) {
+    for (let i = 0; i < GAP_LEVELS.length; i++) {
+      if (wst.dnLevelsHit.has(i)) continue;
+      if (gapDn >= GAP_LEVELS[i]) {
+        enterTrade(w, wst, 'DOWN', ethDn, i);
+      }
     }
   }
 }
@@ -316,30 +293,12 @@ function enterTrade(w, wst, side, ethPrice, levelIdx) {
   };
   state.balance -= cost;
   state.openTrades.push(t);
-  wst.levelsHit.add(levelIdx);
+  if (side === 'UP') wst.upLevelsHit.add(levelIdx);
+  else               wst.dnLevelsHit.add(levelIdx);
   wst.entries++;
   saveState();
-  log(`🟢 ENTRY ETH${side} L${levelIdx+1} [${id}] gap>=0.${(levelIdx+1)*10} price=${ethPrice.toFixed(3)} cost=$${cost.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
+  log(`🟢 ENTRY ETH${side} L${levelIdx+1} [${id}] price=${ethPrice.toFixed(3)} cost=$${cost.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
   emitFn('trade_entered', t);
-}
-
-function closeAllTrades(trades, exitPrice, reason, w, wst) {
-  let totalPnl = 0;
-  for (const t of trades) {
-    const proceeds = exitPrice * t.shares;
-    const pnl = proceeds - t.totalCost;
-    totalPnl += pnl;
-    state.balance += proceeds;
-    state.totalPnl += pnl;
-    state.closedTrades.push({
-      ...t, exitPrice, exitProceeds: +proceeds.toFixed(2),
-      realizedPnl: +pnl.toFixed(4), closedAt: new Date().toISOString(), exitReason: reason,
-    });
-    emitFn('trade_closed', t);
-  }
-  state.openTrades = state.openTrades.filter(t => t.windowStart !== w.windowStart);
-  saveState();
-  log(`${totalPnl >= 0 ? '🟢' : '🔴'} ${reason} closed ${trades.length} trade(s) price=${exitPrice.toFixed(3)} totalPnl=$${totalPnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
 }
 
 async function checkResolution() {
@@ -352,6 +311,7 @@ async function checkResolution() {
     await pollPrices();
     const upPrice = getPrice(w.ethUp);
     const dnPrice = getPrice(w.ethDn);
+    log(`   ETH↑=${upPrice.toFixed(3)} ETH↓=${dnPrice.toFixed(3)}`);
     for (const t of tradesInWindow) {
       const rp = t.side === 'UP' ? upPrice : dnPrice;
       const proceeds = rp * t.shares;
@@ -391,12 +351,10 @@ function buildDashboardSnapshot() {
     window: w ? {
       windowStart: w.windowStart, elapsed, remaining,
       stopped:     wst?.stopped ?? false,
-      side:        wst?.side ?? null,
-      levelsHit:   wst ? [...wst.levelsHit] : [],
+      upLevelsHit: wst ? [...wst.upLevelsHit] : [],
+      dnLevelsHit: wst ? [...wst.dnLevelsHit] : [],
       openCount:   openTrades.length,
-      flips:       wst?.flips ?? 0,
       entries:     wst?.entries ?? 0,
-      tpHits:      wst?.tpHits ?? 0,
       btcUpPrice:  +btcUp.toFixed(3),
       btcDnPrice:  +btcDn.toFixed(3),
       ethUpPrice:  +ethUp.toFixed(3),
@@ -430,7 +388,7 @@ async function tick() {
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
-  log('🚀 Polymarket ETH Gap Bot (5m) — levels=0.10/0.20/0.30 resolved only');
+  log('🚀 Polymarket ETH Gap Bot (5m) — BTC>0.55 gap=0.10/0.20/0.30 both sides');
   loadState(); connectWS(); await tick();
   timer = setInterval(tick, 5000);
   setInterval(async function() {
