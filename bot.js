@@ -20,7 +20,7 @@ const CHAINLINK_ABI = [
 
 const WINDOW_SIZE      = 300;
 const SIGNAL_INTERVAL  = 15;    // every 15 seconds
-const TRADE_SHARES     = 20;
+const TRADE_SHARES     = 50;
 const ENTRY_AMOUNT     = 10;
 const HISTORY_WINDOW   = 900;
 const BUCKET_SIZE      = 15;
@@ -29,7 +29,7 @@ const STARTING_BALANCE = 1000;
 const TOKEN_MIN       = 0.10;   // wider token range
 const TOKEN_MAX       = 0.90;
 const MOVE_MULTIPLIER = 0.5;    // 50% of average — fires more often
-const TREND_BUCKETS   = 2;
+const TREND_BUCKETS   = 3;
 
 let state = { balance: STARTING_BALANCE, openTrades: [], closedTrades: [], totalPnl: 0 };
 const priceBook    = {};
