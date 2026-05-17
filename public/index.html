@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>BTC PRE-MARKET SNIPER</title>
+<title>BTC SNIPER + ORACLE</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Bebas+Neue&display=swap" rel="stylesheet"/>
 <script src="/socket.io/socket.io.js"></script>
 <style>
@@ -44,11 +44,11 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
 .pcell .pval{font-size:26px;font-weight:700;}
 .pcell .pval.up{color:var(--green);}
 .pcell .pval.dn{color:var(--red);}
-.oracle-panel{background:rgba(0,207,255,0.04);border:1px solid rgba(0,207,255,0.2);border-radius:5px;padding:10px 12px;margin-bottom:12px;}
-.oracle-head{font-size:9px;color:var(--cyan);font-weight:700;letter-spacing:1.5px;margin-bottom:8px;display:flex;justify-content:space-between;}
+.oracle-panel{background:rgba(0,207,255,0.04);border:1px solid rgba(0,207,255,0.25);border-radius:5px;padding:10px 12px;margin-bottom:12px;}
+.oracle-head{font-size:9px;color:var(--cyan);font-weight:700;letter-spacing:1.5px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;}
 .oracle-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:8px;}
 .og-item label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:2px;}
-.og-item value{display:block;font-size:14px;font-weight:700;}
+.og-item value{display:block;font-size:13px;font-weight:700;}
 .oracle-signal{padding:6px 10px;border-radius:4px;font-size:10px;font-weight:700;text-align:center;}
 .signal-UP{background:rgba(0,230,118,0.12);border:1px solid var(--green);color:var(--green);}
 .signal-DOWN{background:rgba(255,61,90,0.12);border:1px solid var(--red);color:var(--red);}
@@ -97,14 +97,14 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
 .pos{color:var(--green);font-weight:700;}
 .neg{color:var(--red);font-weight:700;}
 .empty{padding:20px;text-align:center;color:var(--dim2);}
-#logb{height:150px;overflow-y:auto;padding:8px 12px;}
+#logb{height:160px;overflow-y:auto;padding:8px 12px;}
 #logb::-webkit-scrollbar{width:3px;}
 #logb::-webkit-scrollbar-thumb{background:var(--border);}
 .ll{padding:2px 0;line-height:1.6;font-size:11px;color:var(--dim2);}
 .ll.fill{color:var(--green);}
 .ll.rec{color:var(--purple);}
 .ll.oracle{color:var(--cyan);}
-.ll.tp{color:var(--cyan);}
+.ll.tp{color:var(--amber);}
 .ll.sl{color:var(--red);}
 .ll.inf{color:var(--text);}
 </style>
@@ -113,7 +113,7 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
 <header>
   <div>
     <div class="brand">BTC <em>SNIPER</em> + ORACLE</div>
-    <div class="sub">LIMIT@0.32 · SL=0.05 · RECOVERY@0.65 · TP=0.99 · CHAINLINK ORACLE ARB</div>
+    <div class="sub">LIMIT@0.32 · SL=0.05 · RECOVERY@0.65 · TP=0.99 · CHAINLINK ARB</div>
   </div>
   <div class="hstats">
     <div class="hstat"><label>BALANCE</label><div class="val" id="h-bal">$—</div></div>
@@ -124,6 +124,7 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
 </header>
 <main>
 
+  <!-- Live Window -->
   <div class="panel">
     <div class="ph"><h3>Live Window</h3><div class="badge" id="w-ts">—</div></div>
     <div class="wb">
@@ -137,11 +138,11 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
         <div class="pcell"><label>BTC ↓ DOWN</label><div class="pval dn" id="p-dn">—</div></div>
       </div>
 
-      <!-- Oracle panel -->
+      <!-- Oracle Panel -->
       <div class="oracle-panel">
         <div class="oracle-head">
           <span>⚡ CHAINLINK ORACLE — BTC/USD</span>
-          <span id="oracle-updated" style="color:var(--dim2)">—</span>
+          <span id="oracle-updated" style="color:var(--dim2);font-weight:400">—</span>
         </div>
         <div class="oracle-grid">
           <div class="og-item"><label>BTC NOW</label><value id="oracle-btc" style="color:var(--amber)">$—</value></div>
@@ -153,7 +154,10 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
         <div class="oracle-signal signal-NONE" id="oracle-signal">Waiting for Chainlink…</div>
       </div>
 
+      <!-- Phase -->
       <div id="phase-badge" class="phase-badge phase-PENDING">PENDING</div>
+
+      <!-- Limit orders -->
       <div class="limit-orders">
         <div class="lo active" id="lo-up">
           <div class="lo-label">BUY UP LIMIT</div>
@@ -166,10 +170,13 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
           <div class="lo-status" id="lo-dn-st">Waiting…</div>
         </div>
       </div>
+
+      <!-- Trade cards -->
       <div id="trade-cards"></div>
     </div>
   </div>
 
+  <!-- Next Window -->
   <div class="panel">
     <div class="ph"><h3>Pre-Market (Next Window)</h3><div class="badge" id="nxt-ts">—</div></div>
     <div class="wb">
@@ -181,6 +188,7 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
     </div>
   </div>
 
+  <!-- Stats -->
   <div class="panel">
     <div class="ph"><h3>Session Stats</h3></div>
     <div class="sbar">
@@ -193,16 +201,19 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
     </div>
   </div>
 
+  <!-- Open -->
   <div class="panel">
     <div class="ph"><h3>Open Trades</h3><div class="badge" id="oc">0</div></div>
     <div id="open-t"><div class="empty">No open trades</div></div>
   </div>
 
+  <!-- Closed -->
   <div class="panel">
     <div class="ph"><h3>Closed Trades</h3><div class="badge" id="cc">0</div></div>
     <div id="closed-t"><div class="empty">No closed trades yet</div></div>
   </div>
 
+  <!-- Log -->
   <div class="panel">
     <div class="ph"><h3>System Log</h3><div class="badge" id="lc">0</div></div>
     <div id="logb"></div>
@@ -217,39 +228,41 @@ socket.on('connect',    function(){ document.getElementById('wsdot').classList.r
 socket.on('disconnect', function(){ document.getElementById('wsdot').classList.add('off'); });
 
 socket.on('prices', function(p) {
-  if (p.upPrice) set('p-up', p.upPrice.toFixed(3));
-  if (p.dnPrice) set('p-dn', p.dnPrice.toFixed(3));
+  if (p.upPrice)     set('p-up',     p.upPrice.toFixed(3));
+  if (p.dnPrice)     set('p-dn',     p.dnPrice.toFixed(3));
   if (p.nextUpPrice !== undefined) set('nxt-up', p.nextUpPrice > 0 ? p.nextUpPrice.toFixed(3) : '—');
   if (p.nextDnPrice !== undefined) set('nxt-dn', p.nextDnPrice > 0 ? p.nextDnPrice.toFixed(3) : '—');
-  if (p.btcPrice) set('oracle-btc', '$' + p.btcPrice.toFixed(2));
+  if (p.btcPrice)    set('oracle-btc', '$' + p.btcPrice.toFixed(2));
   set('w-upd', new Date().toLocaleTimeString());
 });
 
 socket.on('snapshot', function(d) {
-  set('h-bal', '$' + d.balance.toFixed(2));
+  set('h-bal',  '$' + d.balance.toFixed(2));
   set('h-open', d.openTrades.length);
-  set('oc', d.openTrades.length);
-  set('cc', d.closedTrades.length);
+  set('oc',     d.openTrades.length);
+  set('cc',     d.closedTrades.length);
   var pe = document.getElementById('h-pnl');
   pe.textContent = (d.totalPnl >= 0 ? '+$' : '-$') + Math.abs(d.totalPnl).toFixed(2);
   pe.className = 'val' + (d.totalPnl > 0 ? ' pos' : d.totalPnl < 0 ? ' neg' : '');
+
   var cl = d.closedTrades;
   var profit  = cl.filter(function(t){return (t.realizedPnl||0)>0;}).reduce(function(s,t){return s+(t.realizedPnl||0);},0);
   var tpHits  = cl.filter(function(t){return t.exitReason==='TP';}).length;
   var slHits  = cl.filter(function(t){return t.exitReason==='SL';}).length;
   var oraHits = cl.filter(function(t){return t.type==='ORACLE_ARB';}).length;
   var windows = new Set(cl.map(function(t){return t.windowStart;})).size;
-  set('st-win', windows);
-  set('st-tp', tpHits);
-  set('st-sl', slHits);
+  set('st-win',    windows);
+  set('st-tp',     tpHits);
+  set('st-sl',     slHits);
   set('st-oracle', oraHits);
   set('st-profit', '+$' + profit.toFixed(2));
   var spnl = document.getElementById('st-pnl');
   spnl.textContent = (d.totalPnl >= 0 ? '+$' : '-$') + Math.abs(d.totalPnl).toFixed(2);
   spnl.style.color = d.totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
-  if (d.oracle) renderOracle(d.oracle, d.current);
-  if (d.current) renderCurrentWindow(d.current);
-  if (d.next)    renderNextWindow(d.next);
+
+  if (d.oracle)   renderOracle(d.oracle, d.current);
+  if (d.current)  renderCurrentWindow(d.current);
+  if (d.next)     renderNextWindow(d.next);
   renderOpen(d.openTrades);
   renderClosed(d.closedTrades);
 });
@@ -260,8 +273,10 @@ function set(id, v){ var e = document.getElementById(id); if(e) e.textContent = 
 function fmt(n){ return (n && n > 0) ? Number(n).toFixed(3) : '—'; }
 
 function renderOracle(o, cur) {
-  set('oracle-btc', o.btcPrice > 0 ? '$' + o.btcPrice.toFixed(2) : '$—');
+  set('oracle-btc',  o.btcPrice > 0 ? '$' + o.btcPrice.toFixed(2) : '$—');
   set('oracle-open', o.windowOpen ? '$' + o.windowOpen.toFixed(2) : '$—');
+  if (o.updatedAt) set('oracle-updated', new Date(o.updatedAt * 1000).toLocaleTimeString());
+  if (o.threshold !== undefined) set('oracle-threshold', '$' + o.threshold.toFixed(2));
   var diffEl = document.getElementById('oracle-diff');
   if (o.diff !== null && o.diff !== undefined) {
     diffEl.textContent = (o.diff >= 0 ? '+$' : '-$') + Math.abs(o.diff).toFixed(2);
@@ -272,19 +287,18 @@ function renderOracle(o, cur) {
     dirEl.textContent = o.direction === 'UP' ? '↑ UP' : '↓ DOWN';
     dirEl.style.color = o.direction === 'UP' ? 'var(--green)' : 'var(--red)';
   }
-  if (o.updatedAt) set('oracle-updated', new Date(o.updatedAt * 1000).toLocaleTimeString());
-  if (o.threshold !== undefined) set('oracle-threshold', '$' + o.threshold.toFixed(2));
   var sig = document.getElementById('oracle-signal');
   var wst = cur ? cur.wst : null;
-  var rem = cur ? cur.remaining : 300;
+  var rem = cur ? (cur.remaining || 0) : 300;
+  var absDiff = Math.abs(o.diff || 0);
   if (wst && wst.oracleArbPlaced) {
-    sig.textContent = '🚀 ORACLE ARB PLACED — ' + o.direction + ' signal confirmed';
+    sig.textContent = '🚀 ORACLE ARB PLACED — ' + (o.direction||'') + ' confirmed | BTC moved $' + absDiff.toFixed(0);
     sig.className = 'oracle-signal signal-ARB';
-  } else if (rem <= 90 && o.direction && o.threshold && Math.abs(o.diff || 0) >= o.threshold) {
-    sig.textContent = '⚡ SIGNAL: BTC went ' + o.direction + ' by $' + Math.abs(o.diff).toFixed(0) + ' ≥ threshold $' + o.threshold + ' — watching (' + rem + 's left)';
+  } else if (rem <= 90 && o.direction && o.threshold && absDiff >= o.threshold) {
+    sig.textContent = '⚡ SIGNAL: BTC ' + o.direction + ' $' + absDiff.toFixed(0) + ' ≥ $' + o.threshold + ' threshold — WATCHING (' + rem + 's left)';
     sig.className = 'oracle-signal signal-' + o.direction;
-  } else if (o.direction && Math.abs(o.diff || 0) > 0) {
-    sig.textContent = 'BTC ' + o.direction + ' $' + Math.abs(o.diff||0).toFixed(0) + ' from open | threshold=$' + (o.threshold||'—') + ' | arb at 90s';
+  } else if (o.direction && absDiff > 0) {
+    sig.textContent = 'BTC ' + o.direction + ' $' + absDiff.toFixed(0) + ' from open | threshold=$' + (o.threshold||'—') + ' | arb in final 90s';
     sig.className = 'oracle-signal signal-NONE';
   } else {
     sig.textContent = 'Waiting for Chainlink update…';
@@ -294,6 +308,7 @@ function renderOracle(o, cur) {
 
 function renderCurrentWindow(c) {
   set('w-ts', 'ws:' + c.windowStart);
+  set('w-el', c.elapsed);
   var rem = c.remaining || 0;
   var m = Math.floor(rem/60), s = rem%60;
   var te = document.getElementById('timer');
@@ -305,17 +320,21 @@ function renderCurrentWindow(c) {
   pb.className = 'prog ' + (pct > 80 ? 'warn' : 'ok');
   set('p-up', fmt(c.upPrice));
   set('p-dn', fmt(c.dnPrice));
-  set('w-el', c.elapsed);
+
   var wst = c.wst;
   if (!wst) {
     document.getElementById('phase-badge').textContent = 'NO POSITION';
     document.getElementById('phase-badge').className = 'phase-badge phase-PENDING';
+    document.getElementById('lo-up').className = 'lo';
+    document.getElementById('lo-dn').className = 'lo';
     document.getElementById('trade-cards').innerHTML = '';
     return;
   }
+
   var pb2 = document.getElementById('phase-badge');
   pb2.textContent = wst.phase || 'PENDING';
   pb2.className = 'phase-badge phase-' + (wst.phase || 'PENDING');
+
   var loUp = document.getElementById('lo-up');
   var loDn = document.getElementById('lo-dn');
   if (wst.filledSide === 'UP') {
@@ -330,7 +349,9 @@ function renderCurrentWindow(c) {
     set('lo-up-st', wst.upCancelled ? '❌ Cancelled' : '⏳ Waiting ≤ 0.320');
     set('lo-dn-st', wst.dnCancelled ? '❌ Cancelled' : '⏳ Waiting ≤ 0.320');
   }
+
   var cards = '';
+
   if (wst.firstTrade) {
     var ft = wst.firstTrade;
     var cls = ft.closed ? 'tcard recovery-closed' : (ft.side === 'UP' ? 'tcard first-up' : 'tcard first-dn');
@@ -342,11 +363,12 @@ function renderCurrentWindow(c) {
         '<div class="tc-item"><label>ENTRY</label><value>' + ft.entryPrice.toFixed(3) + '</value></div>' +
         '<div class="tc-item"><label>SHARES</label><value>' + ft.shares.toFixed(2) + '</value></div>' +
         '<div class="tc-item"><label>COST</label><value>$' + ft.cost.toFixed(2) + '</value></div>' +
-        '<div class="tc-item"><label>FLOAT</label><value class="' + (fpnl>=0?'pos':'neg') + '">' + (fpnl>=0?'+':'') + '$' + fpnl.toFixed(2) + '</value></div>' +
+        '<div class="tc-item"><label>FLOAT P&L</label><value class="' + (fpnl>=0?'pos':'neg') + '">' + (fpnl>=0?'+':'') + '$' + fpnl.toFixed(2) + '</value></div>' +
       '</div>' +
       '<div class="sltp-row"><div class="sltp-pill sl-pill">SL ' + ft.sl + '</div><div class="sltp-pill tp-pill">TP ' + ft.tp + '</div></div>' +
     '</div>';
   }
+
   if (wst.recoveries && wst.recoveries.length > 0) {
     cards += '<div class="rec-count">🔄 ' + wst.recoveries.length + ' RECOVER' + (wst.recoveries.length===1?'Y':'IES') + '</div>';
     wst.recoveries.forEach(function(rec) {
@@ -359,19 +381,21 @@ function renderCurrentWindow(c) {
           '<div class="tc-item"><label>ENTRY</label><value>' + rec.entryPrice.toFixed(3) + '</value></div>' +
           '<div class="tc-item"><label>SHARES</label><value>' + rec.shares.toFixed(2) + '</value></div>' +
           '<div class="tc-item"><label>COST</label><value>$' + rec.cost.toFixed(2) + '</value></div>' +
-          '<div class="tc-item"><label>FLOAT</label><value class="' + (rpnl>=0?'pos':'neg') + '">' + (rpnl>=0?'+':'') + '$' + rpnl.toFixed(2) + '</value></div>' +
+          '<div class="tc-item"><label>FLOAT P&L</label><value class="' + (rpnl>=0?'pos':'neg') + '">' + (rpnl>=0?'+':'') + '$' + rpnl.toFixed(2) + '</value></div>' +
         '</div>' +
         '<div class="sltp-row"><div class="sltp-pill sl-pill">SL ' + rec.sl + '</div><div class="sltp-pill tp-pill">TP ' + rec.tp + '</div></div>' +
       '</div>';
     });
   }
+
   if (wst.oracleArbPlaced) {
     cards += '<div class="tcard oracle-card">' +
-      '<div class="tc-head"><span class="tc-title" style="color:var(--cyan)">⚡ ORACLE ARB</span>' +
-      '<span style="font-size:9px;color:var(--cyan)">PLACED</span></div>' +
-      '<div style="font-size:10px;color:var(--dim2)">$' + 50 + ' on Chainlink signal — resolves at window end</div>' +
+      '<div class="tc-head"><span class="tc-title" style="color:var(--cyan)">⚡ ORACLE ARB · $50</span>' +
+      '<span style="font-size:9px;color:var(--cyan)">ACTIVE</span></div>' +
+      '<div style="font-size:10px;color:var(--dim2);margin-top:4px">Chainlink signal confirmed — resolves at window end</div>' +
     '</div>';
   }
+
   document.getElementById('trade-cards').innerHTML = cards || '<div style="color:var(--dim2);font-size:10px;margin-top:6px">Waiting for limit fill…</div>';
 }
 
@@ -391,10 +415,12 @@ function renderOpen(trades) {
   var rows = trades.map(function(t) {
     var pnl = t.floatingPnl || 0;
     var isOracle = t.type === 'ORACLE_ARB';
+    var isRec    = t.type && t.type.indexOf('RECOVERY') >= 0;
+    var col = isOracle ? 'var(--cyan)' : isRec ? 'var(--purple)' : 'var(--amber)';
     return '<tr>' +
       '<td style="color:var(--cyan);font-size:9px">' + t.id + '</td>' +
       '<td class="' + (t.side==='UP'?'pos':'neg') + '">' + t.side + '</td>' +
-      '<td style="color:' + (isOracle?'var(--cyan)':t.type&&t.type.indexOf('RECOVERY')>=0?'var(--purple)':'var(--amber)') + ';font-size:9px">' + (t.type||'—') + '</td>' +
+      '<td style="color:' + col + ';font-size:9px">' + (t.type||'—') + '</td>' +
       '<td>' + t.entryPrice.toFixed(3) + '</td>' +
       '<td style="color:var(--red)">' + (t.sl||'—') + '</td>' +
       '<td style="color:var(--green)">' + t.tp + '</td>' +
@@ -413,10 +439,12 @@ function renderClosed(trades) {
     var pnl = t.realizedPnl || 0;
     var rsn = t.exitReason || '—';
     var isOracle = t.type === 'ORACLE_ARB';
+    var isRec    = t.type && t.type.indexOf('RECOVERY') >= 0;
+    var col = isOracle ? 'var(--cyan)' : isRec ? 'var(--purple)' : 'var(--amber)';
     return '<tr>' +
       '<td style="color:var(--cyan);font-size:9px">' + t.id + '</td>' +
       '<td class="' + (t.side==='UP'?'pos':'neg') + '">' + t.side + '</td>' +
-      '<td style="color:' + (isOracle?'var(--cyan)':t.type&&t.type.indexOf('RECOVERY')>=0?'var(--purple)':'var(--amber)') + ';font-size:9px">' + (t.type||'—') + '</td>' +
+      '<td style="color:' + col + ';font-size:9px">' + (t.type||'—') + '</td>' +
       '<td>' + t.entryPrice.toFixed(3) + '</td>' +
       '<td>' + (t.exitPrice ? t.exitPrice.toFixed(3) : '—') + '</td>' +
       '<td style="color:' + (rsn==='TP'?'var(--green)':rsn==='SL'?'var(--red)':'var(--cyan)') + ';font-size:9px">' + rsn + '</td>' +
@@ -429,12 +457,12 @@ function renderClosed(trades) {
 function addLog(line) {
   var el = document.createElement('div');
   var c = 'll';
-  if (line.indexOf('ORACLE') >= 0 || line.indexOf('Chainlink') >= 0 || line.indexOf('⚡') >= 0) c += ' oracle';
+  if (line.indexOf('ORACLE') >= 0 || line.indexOf('Chainlink') >= 0 || line.indexOf('🎯') >= 0 || line.indexOf('🚀') >= 0) c += ' oracle';
   else if (line.indexOf('FILLED') >= 0) c += ' fill';
   else if (line.indexOf('RECOVERY') >= 0) c += ' rec';
   else if (line.indexOf('TP') >= 0) c += ' tp';
   else if (line.indexOf('SL') >= 0) c += ' sl';
-  else if (line.indexOf('✅') >= 0 || line.indexOf('🚀') >= 0) c += ' inf';
+  else if (line.indexOf('✅') >= 0) c += ' inf';
   el.className = c;
   el.textContent = line;
   var lb = document.getElementById('logb');
