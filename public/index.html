@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>BTC SNIPER + ORACLE</title>
+<title>BTC ORACLE ARB</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Bebas+Neue&display=swap" rel="stylesheet"/>
 <script src="/socket.io/socket.io.js"></script>
 <style>
@@ -22,98 +22,66 @@ header{display:flex;align-items:center;justify-content:space-between;flex-wrap:w
 .wsdot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 1.5s infinite;}
 .wsdot.off{background:var(--red);box-shadow:none;animation:none;}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
-main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;margin:0 auto;}
+main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:800px;margin:0 auto;}
 .panel{background:var(--panel);border:1px solid var(--border);border-radius:6px;overflow:hidden;}
 .ph{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--panel2);}
 .ph h3{font-size:9px;font-weight:700;letter-spacing:2px;color:var(--dim2);text-transform:uppercase;}
 .ph .badge{font-size:10px;color:var(--cyan);font-weight:700;}
 .wb{padding:14px;}
 .timer-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
-.big-timer{font-family:'Bebas Neue';font-size:48px;letter-spacing:2px;line-height:1;}
+.big-timer{font-family:'Bebas Neue';font-size:52px;letter-spacing:2px;line-height:1;}
 .big-timer.g{color:var(--green);}
 .big-timer.a{color:var(--amber);}
 .big-timer.r{color:var(--red);}
 .big-timer.d{color:var(--dim2);}
-.prog-wrap{height:3px;background:var(--border);border-radius:2px;margin-bottom:12px;overflow:hidden;}
+.prog-wrap{height:3px;background:var(--border);border-radius:2px;margin-bottom:14px;overflow:hidden;}
 .prog{height:100%;border-radius:2px;}
 .prog.ok{background:linear-gradient(90deg,var(--green),var(--cyan));}
 .prog.warn{background:linear-gradient(90deg,var(--amber),var(--red));}
-.price-row{display:flex;gap:8px;margin-bottom:12px;}
+.price-row{display:flex;gap:8px;margin-bottom:14px;}
 .pcell{flex:1;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:4px;padding:10px 12px;}
 .pcell label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:5px;}
-.pcell .pval{font-size:26px;font-weight:700;}
+.pcell .pval{font-size:24px;font-weight:700;}
 .pcell .pval.up{color:var(--green);}
 .pcell .pval.dn{color:var(--red);}
-.oracle-panel{background:rgba(0,207,255,0.04);border:1px solid rgba(0,207,255,0.25);border-radius:5px;padding:10px 12px;margin-bottom:12px;}
-.oracle-head{font-size:9px;color:var(--cyan);font-weight:700;letter-spacing:1.5px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;}
-.oracle-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:8px;}
-.og-item label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:2px;}
-.og-item value{display:block;font-size:13px;font-weight:700;}
-.oracle-signal{padding:6px 10px;border-radius:4px;font-size:10px;font-weight:700;text-align:center;}
-.signal-UP{background:rgba(0,230,118,0.12);border:1px solid var(--green);color:var(--green);}
-.signal-DOWN{background:rgba(255,61,90,0.12);border:1px solid var(--red);color:var(--red);}
-.signal-NONE{background:rgba(255,255,255,0.03);border:1px solid var(--border);color:var(--dim2);}
-.signal-ARB{background:rgba(179,136,255,0.15);border:1px solid var(--purple);color:var(--purple);}
-.phase-badge{display:inline-block;padding:4px 12px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:12px;}
-.phase-PENDING{border:1px solid var(--amber);color:var(--amber);background:rgba(255,179,0,0.08);}
-.phase-FILLED{border:1px solid var(--green);color:var(--green);background:rgba(0,230,118,0.08);}
-.phase-RECOVERY{border:1px solid var(--purple);color:var(--purple);background:rgba(179,136,255,0.08);}
-.phase-RECOVERY_WAIT{border:1px solid var(--cyan);color:var(--cyan);background:rgba(0,207,255,0.08);}
-.phase-CLOSED{border:1px solid var(--dim);color:var(--dim2);}
-.limit-orders{display:flex;gap:8px;margin-bottom:12px;}
-.lo{flex:1;border-radius:4px;border:1px solid var(--border);padding:8px 10px;text-align:center;}
-.lo.active{border-color:var(--amber);background:rgba(255,179,0,0.06);}
-.lo.filled{border-color:var(--green);background:rgba(0,230,118,0.06);}
-.lo.cancelled{border-color:var(--dim);opacity:.4;}
-.lo-label{font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:4px;}
-.lo-price{font-size:18px;font-weight:700;}
-.lo-price.up{color:var(--green);}
-.lo-price.dn{color:var(--red);}
-.lo-status{font-size:9px;margin-top:3px;}
-.tcard{border-radius:5px;border:1px solid var(--border);padding:10px 12px;margin-bottom:8px;}
-.tcard.first-up{border-color:var(--green);}
-.tcard.first-dn{border-color:var(--red);}
-.tcard.recovery-active{border-color:var(--purple);}
-.tcard.recovery-closed{border-color:var(--dim);opacity:.6;}
-.tcard.oracle-card{border-color:var(--cyan);background:rgba(0,207,255,0.04);}
-.tc-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
-.tc-title{font-size:9px;font-weight:700;letter-spacing:1px;}
-.tc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;}
-.tc-item label{display:block;font-size:7px;color:var(--dim2);letter-spacing:1px;margin-bottom:1px;}
-.tc-item value{display:block;font-size:12px;font-weight:700;}
-.sltp-row{display:flex;gap:6px;margin-top:8px;}
-.sltp-pill{flex:1;padding:4px 8px;border-radius:3px;text-align:center;font-size:10px;font-weight:700;}
-.sl-pill{border:1px solid var(--red);color:var(--red);background:rgba(255,61,90,0.08);}
-.tp-pill{border:1px solid var(--green);color:var(--green);background:rgba(0,230,118,0.08);}
-.rec-count{font-size:10px;color:var(--purple);margin-bottom:8px;font-weight:700;}
-.sbar{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--border);}
+.pcell .pval.btc{color:var(--amber);}
+.oracle-box{background:rgba(0,207,255,0.04);border:1px solid rgba(0,207,255,0.25);border-radius:5px;padding:12px;margin-bottom:14px;}
+.oracle-box h4{font-size:9px;color:var(--cyan);font-weight:700;letter-spacing:1.5px;margin-bottom:10px;display:flex;justify-content:space-between;}
+.ogrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px;}
+.og label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:3px;}
+.og value{display:block;font-size:14px;font-weight:700;}
+.signal{padding:8px 12px;border-radius:4px;font-size:11px;font-weight:700;text-align:center;letter-spacing:.5px;}
+.signal.none{background:rgba(255,255,255,0.03);border:1px solid var(--border);color:var(--dim2);}
+.signal.up{background:rgba(0,230,118,0.10);border:1px solid var(--green);color:var(--green);}
+.signal.down{background:rgba(255,61,90,0.10);border:1px solid var(--red);color:var(--red);}
+.signal.arb{background:rgba(179,136,255,0.12);border:1px solid var(--purple);color:var(--purple);}
+.sbar{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--border);}
 .sbi{background:var(--panel2);padding:8px;text-align:center;}
 .sbi label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:3px;}
-.sbi value{display:block;font-size:14px;font-weight:700;}
+.sbi value{display:block;font-size:15px;font-weight:700;}
 .tt{width:100%;border-collapse:collapse;}
-.tt th{padding:5px 8px;font-size:8px;color:var(--dim2);letter-spacing:1px;border-bottom:1px solid var(--border);text-align:left;}
-.tt td{padding:5px 8px;border-bottom:1px solid rgba(28,42,58,0.4);font-size:10px;}
+.tt th{padding:6px 10px;font-size:8px;color:var(--dim2);letter-spacing:1px;border-bottom:1px solid var(--border);text-align:left;}
+.tt td{padding:6px 10px;border-bottom:1px solid rgba(28,42,58,0.5);font-size:11px;}
 .tt tr:last-child td{border-bottom:none;}
+.tt tr:hover td{background:rgba(255,255,255,0.02);}
 .pos{color:var(--green);font-weight:700;}
 .neg{color:var(--red);font-weight:700;}
 .empty{padding:20px;text-align:center;color:var(--dim2);}
-#logb{height:160px;overflow-y:auto;padding:8px 12px;}
+#logb{height:180px;overflow-y:auto;padding:8px 12px;}
 #logb::-webkit-scrollbar{width:3px;}
 #logb::-webkit-scrollbar-thumb{background:var(--border);}
 .ll{padding:2px 0;line-height:1.6;font-size:11px;color:var(--dim2);}
-.ll.fill{color:var(--green);}
-.ll.rec{color:var(--purple);}
 .ll.oracle{color:var(--cyan);}
-.ll.tp{color:var(--amber);}
-.ll.sl{color:var(--red);}
+.ll.win{color:var(--green);}
+.ll.loss{color:var(--red);}
 .ll.inf{color:var(--text);}
 </style>
 </head>
 <body>
 <header>
   <div>
-    <div class="brand">BTC <em>SNIPER</em> + ORACLE</div>
-    <div class="sub">LIMIT@0.32 · SL=0.05 · RECOVERY@0.65 · TP=0.99 · CHAINLINK ARB</div>
+    <div class="brand">BTC <em>ORACLE</em> ARB</div>
+    <div class="sub">CHAINLINK BTC/USD → POLYMARKET 5M · $50/SIGNAL · DYNAMIC THRESHOLD · HOLD TO RESOLUTION</div>
   </div>
   <div class="hstats">
     <div class="hstat"><label>BALANCE</label><div class="val" id="h-bal">$—</div></div>
@@ -124,67 +92,41 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
 </header>
 <main>
 
-  <!-- Live Window -->
+  <!-- Window -->
   <div class="panel">
     <div class="ph"><h3>Live Window</h3><div class="badge" id="w-ts">—</div></div>
     <div class="wb">
       <div class="timer-row">
         <div class="big-timer d" id="timer">—:——</div>
-        <div style="text-align:right;font-size:10px;color:var(--dim2)">Elapsed: <span id="w-el">—</span>s<br>Updated: <span id="w-upd">—</span></div>
+        <div style="text-align:right;font-size:10px;color:var(--dim2)">
+          Elapsed: <span id="w-el">—</span>s<br>
+          Updated: <span id="w-upd">—</span>
+        </div>
       </div>
       <div class="prog-wrap"><div class="prog ok" id="prog" style="width:0%"></div></div>
+
+      <!-- Prices -->
       <div class="price-row">
-        <div class="pcell"><label>BTC ↑ UP</label><div class="pval up" id="p-up">—</div></div>
-        <div class="pcell"><label>BTC ↓ DOWN</label><div class="pval dn" id="p-dn">—</div></div>
+        <div class="pcell"><label>BTC/USD (Chainlink)</label><div class="pval btc" id="p-btc">$—</div></div>
+        <div class="pcell"><label>BTC ↑ UP token</label><div class="pval up" id="p-up">—</div></div>
+        <div class="pcell"><label>BTC ↓ DOWN token</label><div class="pval dn" id="p-dn">—</div></div>
       </div>
 
-      <!-- Oracle Panel -->
-      <div class="oracle-panel">
-        <div class="oracle-head">
-          <span>⚡ CHAINLINK ORACLE — BTC/USD</span>
-          <span id="oracle-updated" style="color:var(--dim2);font-weight:400">—</span>
+      <!-- Oracle box -->
+      <div class="oracle-box">
+        <h4>
+          <span>⚡ ORACLE STATUS</span>
+          <span id="oracle-time" style="color:var(--dim2);font-weight:400;font-size:9px">—</span>
+        </h4>
+        <div class="ogrid">
+          <div class="og"><label>WINDOW OPEN</label><value id="o-open" style="color:var(--dim2)">$—</value></div>
+          <div class="og"><label>BTC NOW</label><value id="o-now" style="color:var(--amber)">$—</value></div>
+          <div class="og"><label>DIFFERENCE</label><value id="o-diff">$—</value></div>
+          <div class="og"><label>DIRECTION</label><value id="o-dir">—</value></div>
+          <div class="og"><label>DYN THRESHOLD</label><value id="o-thr" style="color:var(--purple)">$—</value></div>
         </div>
-        <div class="oracle-grid">
-          <div class="og-item"><label>BTC NOW</label><value id="oracle-btc" style="color:var(--amber)">$—</value></div>
-          <div class="og-item"><label>WINDOW OPEN</label><value id="oracle-open" style="color:var(--dim2)">$—</value></div>
-          <div class="og-item"><label>DIFFERENCE</label><value id="oracle-diff">$—</value></div>
-          <div class="og-item"><label>DIRECTION</label><value id="oracle-dir">—</value></div>
-          <div class="og-item"><label>DYN THRESHOLD</label><value id="oracle-threshold" style="color:var(--purple)">$—</value></div>
-        </div>
-        <div class="oracle-signal signal-NONE" id="oracle-signal">Waiting for Chainlink…</div>
+        <div class="signal none" id="o-signal">Waiting for Chainlink update…</div>
       </div>
-
-      <!-- Phase -->
-      <div id="phase-badge" class="phase-badge phase-PENDING">PENDING</div>
-
-      <!-- Limit orders -->
-      <div class="limit-orders">
-        <div class="lo active" id="lo-up">
-          <div class="lo-label">BUY UP LIMIT</div>
-          <div class="lo-price up">0.320</div>
-          <div class="lo-status" id="lo-up-st">Waiting…</div>
-        </div>
-        <div class="lo active" id="lo-dn">
-          <div class="lo-label">BUY DOWN LIMIT</div>
-          <div class="lo-price dn">0.320</div>
-          <div class="lo-status" id="lo-dn-st">Waiting…</div>
-        </div>
-      </div>
-
-      <!-- Trade cards -->
-      <div id="trade-cards"></div>
-    </div>
-  </div>
-
-  <!-- Next Window -->
-  <div class="panel">
-    <div class="ph"><h3>Pre-Market (Next Window)</h3><div class="badge" id="nxt-ts">—</div></div>
-    <div class="wb">
-      <div class="price-row">
-        <div class="pcell"><label>BTC ↑ UP</label><div class="pval up" id="nxt-up">—</div></div>
-        <div class="pcell"><label>BTC ↓ DOWN</label><div class="pval dn" id="nxt-dn">—</div></div>
-      </div>
-      <div id="nxt-status" style="font-size:10px;color:var(--amber)">Searching…</div>
     </div>
   </div>
 
@@ -192,10 +134,9 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
   <div class="panel">
     <div class="ph"><h3>Session Stats</h3></div>
     <div class="sbar">
-      <div class="sbi"><label>WINDOWS</label><value id="st-win">0</value></div>
-      <div class="sbi"><label>TP HITS</label><value id="st-tp" style="color:var(--green)">0</value></div>
-      <div class="sbi"><label>SL HITS</label><value id="st-sl" style="color:var(--red)">0</value></div>
-      <div class="sbi"><label>ORACLE HITS</label><value id="st-oracle" style="color:var(--cyan)">0</value></div>
+      <div class="sbi"><label>SIGNALS</label><value id="st-sig">0</value></div>
+      <div class="sbi"><label>WINS</label><value id="st-win" style="color:var(--green)">0</value></div>
+      <div class="sbi"><label>LOSSES</label><value id="st-loss" style="color:var(--red)">0</value></div>
       <div class="sbi"><label>PROFIT</label><value id="st-profit" style="color:var(--green)">$0</value></div>
       <div class="sbi"><label>NET P&L</label><value id="st-pnl">$0</value></div>
     </div>
@@ -223,20 +164,22 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
 <script>
 var socket = io();
 var logCount = 0;
+var lastSnap = null;
 
 socket.on('connect',    function(){ document.getElementById('wsdot').classList.remove('off'); });
 socket.on('disconnect', function(){ document.getElementById('wsdot').classList.add('off'); });
 
 socket.on('prices', function(p) {
-  if (p.upPrice)     set('p-up',     p.upPrice.toFixed(3));
-  if (p.dnPrice)     set('p-dn',     p.dnPrice.toFixed(3));
-  if (p.nextUpPrice !== undefined) set('nxt-up', p.nextUpPrice > 0 ? p.nextUpPrice.toFixed(3) : '—');
-  if (p.nextDnPrice !== undefined) set('nxt-dn', p.nextDnPrice > 0 ? p.nextDnPrice.toFixed(3) : '—');
-  if (p.btcPrice)    set('oracle-btc', '$' + p.btcPrice.toFixed(2));
+  if (p.btcPrice) set('p-btc', '$' + p.btcPrice.toFixed(2));
+  if (p.btcPrice) set('o-now', '$' + p.btcPrice.toFixed(2));
+  if (p.upPrice)  set('p-up', p.upPrice > 0 ? p.upPrice.toFixed(3) : '—');
+  if (p.dnPrice)  set('p-dn', p.dnPrice > 0 ? p.dnPrice.toFixed(3) : '—');
   set('w-upd', new Date().toLocaleTimeString());
+  if (lastSnap) updateSignal(lastSnap.oracle, lastSnap.window);
 });
 
 socket.on('snapshot', function(d) {
+  lastSnap = d;
   set('h-bal',  '$' + d.balance.toFixed(2));
   set('h-open', d.openTrades.length);
   set('oc',     d.openTrades.length);
@@ -246,23 +189,20 @@ socket.on('snapshot', function(d) {
   pe.className = 'val' + (d.totalPnl > 0 ? ' pos' : d.totalPnl < 0 ? ' neg' : '');
 
   var cl = d.closedTrades;
-  var profit  = cl.filter(function(t){return (t.realizedPnl||0)>0;}).reduce(function(s,t){return s+(t.realizedPnl||0);},0);
-  var tpHits  = cl.filter(function(t){return t.exitReason==='TP';}).length;
-  var slHits  = cl.filter(function(t){return t.exitReason==='SL';}).length;
-  var oraHits = cl.filter(function(t){return t.type==='ORACLE_ARB';}).length;
-  var windows = new Set(cl.map(function(t){return t.windowStart;})).size;
-  set('st-win',    windows);
-  set('st-tp',     tpHits);
-  set('st-sl',     slHits);
-  set('st-oracle', oraHits);
+  var wins   = cl.filter(function(t){return (t.realizedPnl||0) > 0;}).length;
+  var losses = cl.filter(function(t){return (t.realizedPnl||0) < 0;}).length;
+  var profit = cl.filter(function(t){return (t.realizedPnl||0) > 0;}).reduce(function(s,t){return s+(t.realizedPnl||0);},0);
+  set('st-sig',    cl.length);
+  set('st-win',    wins);
+  set('st-loss',   losses);
   set('st-profit', '+$' + profit.toFixed(2));
   var spnl = document.getElementById('st-pnl');
   spnl.textContent = (d.totalPnl >= 0 ? '+$' : '-$') + Math.abs(d.totalPnl).toFixed(2);
   spnl.style.color = d.totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
 
-  if (d.oracle)   renderOracle(d.oracle, d.current);
-  if (d.current)  renderCurrentWindow(d.current);
-  if (d.next)     renderNextWindow(d.next);
+  if (d.oracle)  renderOracle(d.oracle);
+  if (d.window)  renderWindow(d.window);
+  if (d.oracle && d.window) updateSignal(d.oracle, d.window);
   renderOpen(d.openTrades);
   renderClosed(d.closedTrades);
 });
@@ -270,143 +210,64 @@ socket.on('snapshot', function(d) {
 socket.on('log', function(line){ addLog(line); });
 
 function set(id, v){ var e = document.getElementById(id); if(e) e.textContent = v; }
-function fmt(n){ return (n && n > 0) ? Number(n).toFixed(3) : '—'; }
 
-function renderOracle(o, cur) {
-  set('oracle-btc',  o.btcPrice > 0 ? '$' + o.btcPrice.toFixed(2) : '$—');
-  set('oracle-open', o.windowOpen ? '$' + o.windowOpen.toFixed(2) : '$—');
-  if (o.updatedAt) set('oracle-updated', new Date(o.updatedAt * 1000).toLocaleTimeString());
-  if (o.threshold !== undefined) set('oracle-threshold', '$' + o.threshold.toFixed(2));
-  var diffEl = document.getElementById('oracle-diff');
+function renderOracle(o) {
+  set('o-open', o.windowOpen ? '$' + o.windowOpen.toFixed(2) : '$—');
+  set('o-now',  o.btcPrice > 0 ? '$' + o.btcPrice.toFixed(2) : '$—');
+  set('p-btc',  o.btcPrice > 0 ? '$' + o.btcPrice.toFixed(2) : '$—');
+  if (o.updatedAt) set('oracle-time', new Date(o.updatedAt * 1000).toLocaleTimeString());
+  if (o.threshold !== undefined) set('o-thr', '$' + o.threshold.toFixed(2));
+  var diffEl = document.getElementById('o-diff');
   if (o.diff !== null && o.diff !== undefined) {
     diffEl.textContent = (o.diff >= 0 ? '+$' : '-$') + Math.abs(o.diff).toFixed(2);
-    diffEl.style.color = o.diff >= 0 ? 'var(--green)' : 'var(--red)';
+    diffEl.style.color = o.diff > 0 ? 'var(--green)' : o.diff < 0 ? 'var(--red)' : 'var(--text)';
   }
-  var dirEl = document.getElementById('oracle-dir');
+  var dirEl = document.getElementById('o-dir');
   if (o.direction) {
     dirEl.textContent = o.direction === 'UP' ? '↑ UP' : '↓ DOWN';
     dirEl.style.color = o.direction === 'UP' ? 'var(--green)' : 'var(--red)';
-  }
-  var sig = document.getElementById('oracle-signal');
-  var wst = cur ? cur.wst : null;
-  var rem = cur ? (cur.remaining || 0) : 300;
-  var absDiff = Math.abs(o.diff || 0);
-  if (wst && wst.oracleArbPlaced) {
-    sig.textContent = '🚀 ORACLE ARB PLACED — ' + (o.direction||'') + ' confirmed | BTC moved $' + absDiff.toFixed(0);
-    sig.className = 'oracle-signal signal-ARB';
-  } else if (rem <= 90 && o.direction && o.threshold && absDiff >= o.threshold) {
-    sig.textContent = '⚡ SIGNAL: BTC ' + o.direction + ' $' + absDiff.toFixed(0) + ' ≥ $' + o.threshold + ' threshold — WATCHING (' + rem + 's left)';
-    sig.className = 'oracle-signal signal-' + o.direction;
-  } else if (o.direction && absDiff > 0) {
-    sig.textContent = 'BTC ' + o.direction + ' $' + absDiff.toFixed(0) + ' from open | threshold=$' + (o.threshold||'—') + ' | arb in final 90s';
-    sig.className = 'oracle-signal signal-NONE';
   } else {
-    sig.textContent = 'Waiting for Chainlink update…';
-    sig.className = 'oracle-signal signal-NONE';
+    dirEl.textContent = '—';
+    dirEl.style.color = 'var(--dim2)';
   }
 }
 
-function renderCurrentWindow(c) {
-  set('w-ts', 'ws:' + c.windowStart);
-  set('w-el', c.elapsed);
-  var rem = c.remaining || 0;
+function updateSignal(o, w) {
+  var sig = document.getElementById('o-signal');
+  if (!sig || !o) return;
+  var rem     = w ? (w.remaining || 0) : 300;
+  var absDiff = Math.abs(o.diff || 0);
+  var thr     = o.threshold || 0;
+  if (w && w.oracleArbPlaced) {
+    sig.textContent = '🚀 ORACLE ARB PLACED — BTC ' + (o.direction||'') + ' $' + absDiff.toFixed(0) + ' from open — $50 on ' + (o.direction||'') + ' token';
+    sig.className = 'signal arb';
+  } else if (rem <= 90 && o.direction && thr > 0 && absDiff >= thr) {
+    sig.textContent = '⚡ SIGNAL ACTIVE: BTC ' + o.direction + ' $' + absDiff.toFixed(0) + ' ≥ $' + thr.toFixed(0) + ' threshold — buying ' + o.direction + ' token (' + rem + 's left)';
+    sig.className = 'signal ' + o.direction.toLowerCase();
+  } else if (rem <= 90 && o.direction) {
+    sig.textContent = 'In arb window (' + rem + 's) — BTC ' + o.direction + ' $' + absDiff.toFixed(0) + ' | need $' + thr.toFixed(0) + ' to trigger';
+    sig.className = 'signal none';
+  } else if (o.direction && absDiff > 0) {
+    sig.textContent = 'BTC ' + o.direction + ' $' + absDiff.toFixed(0) + ' from open | threshold=$' + thr.toFixed(0) + ' | arb activates at 90s remaining';
+    sig.className = 'signal none';
+  } else {
+    sig.textContent = 'Waiting for Chainlink update…';
+    sig.className = 'signal none';
+  }
+}
+
+function renderWindow(w) {
+  set('w-ts', 'ws:' + w.windowStart);
+  set('w-el', w.elapsed);
+  var rem = w.remaining || 0;
   var m = Math.floor(rem/60), s = rem%60;
   var te = document.getElementById('timer');
   te.textContent = m + ':' + (s<10?'0':'') + s;
   te.className = 'big-timer ' + (rem > 120 ? 'g' : rem > 30 ? 'a' : 'r');
-  var pct = Math.min(100, (c.elapsed/300)*100);
+  var pct = Math.min(100, (w.elapsed/300)*100);
   var pb = document.getElementById('prog');
   pb.style.width = pct + '%';
   pb.className = 'prog ' + (pct > 80 ? 'warn' : 'ok');
-  set('p-up', fmt(c.upPrice));
-  set('p-dn', fmt(c.dnPrice));
-
-  var wst = c.wst;
-  if (!wst) {
-    document.getElementById('phase-badge').textContent = 'NO POSITION';
-    document.getElementById('phase-badge').className = 'phase-badge phase-PENDING';
-    document.getElementById('lo-up').className = 'lo';
-    document.getElementById('lo-dn').className = 'lo';
-    document.getElementById('trade-cards').innerHTML = '';
-    return;
-  }
-
-  var pb2 = document.getElementById('phase-badge');
-  pb2.textContent = wst.phase || 'PENDING';
-  pb2.className = 'phase-badge phase-' + (wst.phase || 'PENDING');
-
-  var loUp = document.getElementById('lo-up');
-  var loDn = document.getElementById('lo-dn');
-  if (wst.filledSide === 'UP') {
-    loUp.className = 'lo filled'; loDn.className = 'lo cancelled';
-    set('lo-up-st', '✅ FILLED'); set('lo-dn-st', '❌ Cancelled');
-  } else if (wst.filledSide === 'DOWN') {
-    loDn.className = 'lo filled'; loUp.className = 'lo cancelled';
-    set('lo-dn-st', '✅ FILLED'); set('lo-up-st', '❌ Cancelled');
-  } else {
-    loUp.className = 'lo ' + (wst.upCancelled ? 'cancelled' : 'active');
-    loDn.className = 'lo ' + (wst.dnCancelled ? 'cancelled' : 'active');
-    set('lo-up-st', wst.upCancelled ? '❌ Cancelled' : '⏳ Waiting ≤ 0.320');
-    set('lo-dn-st', wst.dnCancelled ? '❌ Cancelled' : '⏳ Waiting ≤ 0.320');
-  }
-
-  var cards = '';
-
-  if (wst.firstTrade) {
-    var ft = wst.firstTrade;
-    var cls = ft.closed ? 'tcard recovery-closed' : (ft.side === 'UP' ? 'tcard first-up' : 'tcard first-dn');
-    var fpnl = ft.floatingPnl || 0;
-    cards += '<div class="' + cls + '">' +
-      '<div class="tc-head"><span class="tc-title" style="color:' + (ft.side==='UP'?'var(--green)':'var(--red)') + '">FIRST · BTC ' + ft.side + '</span>' +
-      '<span style="font-size:9px;color:' + (ft.closed?'var(--dim2)':'var(--amber)') + '">' + (ft.closed?'CLOSED':'OPEN') + '</span></div>' +
-      '<div class="tc-grid">' +
-        '<div class="tc-item"><label>ENTRY</label><value>' + ft.entryPrice.toFixed(3) + '</value></div>' +
-        '<div class="tc-item"><label>SHARES</label><value>' + ft.shares.toFixed(2) + '</value></div>' +
-        '<div class="tc-item"><label>COST</label><value>$' + ft.cost.toFixed(2) + '</value></div>' +
-        '<div class="tc-item"><label>FLOAT P&L</label><value class="' + (fpnl>=0?'pos':'neg') + '">' + (fpnl>=0?'+':'') + '$' + fpnl.toFixed(2) + '</value></div>' +
-      '</div>' +
-      '<div class="sltp-row"><div class="sltp-pill sl-pill">SL ' + ft.sl + '</div><div class="sltp-pill tp-pill">TP ' + ft.tp + '</div></div>' +
-    '</div>';
-  }
-
-  if (wst.recoveries && wst.recoveries.length > 0) {
-    cards += '<div class="rec-count">🔄 ' + wst.recoveries.length + ' RECOVER' + (wst.recoveries.length===1?'Y':'IES') + '</div>';
-    wst.recoveries.forEach(function(rec) {
-      var rcls = rec.closed ? 'tcard recovery-closed' : 'tcard recovery-active';
-      var rpnl = rec.floatingPnl || 0;
-      cards += '<div class="' + rcls + '">' +
-        '<div class="tc-head"><span class="tc-title" style="color:var(--purple)">RECOVERY#' + rec.num + ' · BTC ' + rec.side + '</span>' +
-        '<span style="font-size:9px;color:' + (rec.closed?'var(--dim2)':'var(--purple)') + '">' + (rec.closed?'CLOSED':'OPEN') + '</span></div>' +
-        '<div class="tc-grid">' +
-          '<div class="tc-item"><label>ENTRY</label><value>' + rec.entryPrice.toFixed(3) + '</value></div>' +
-          '<div class="tc-item"><label>SHARES</label><value>' + rec.shares.toFixed(2) + '</value></div>' +
-          '<div class="tc-item"><label>COST</label><value>$' + rec.cost.toFixed(2) + '</value></div>' +
-          '<div class="tc-item"><label>FLOAT P&L</label><value class="' + (rpnl>=0?'pos':'neg') + '">' + (rpnl>=0?'+':'') + '$' + rpnl.toFixed(2) + '</value></div>' +
-        '</div>' +
-        '<div class="sltp-row"><div class="sltp-pill sl-pill">SL ' + rec.sl + '</div><div class="sltp-pill tp-pill">TP ' + rec.tp + '</div></div>' +
-      '</div>';
-    });
-  }
-
-  if (wst.oracleArbPlaced) {
-    cards += '<div class="tcard oracle-card">' +
-      '<div class="tc-head"><span class="tc-title" style="color:var(--cyan)">⚡ ORACLE ARB · $50</span>' +
-      '<span style="font-size:9px;color:var(--cyan)">ACTIVE</span></div>' +
-      '<div style="font-size:10px;color:var(--dim2);margin-top:4px">Chainlink signal confirmed — resolves at window end</div>' +
-    '</div>';
-  }
-
-  document.getElementById('trade-cards').innerHTML = cards || '<div style="color:var(--dim2);font-size:10px;margin-top:6px">Waiting for limit fill…</div>';
-}
-
-function renderNextWindow(n) {
-  set('nxt-ts', 'ws:' + n.windowStart);
-  set('nxt-up', n.upPrice > 0 ? n.upPrice.toFixed(3) : '—');
-  set('nxt-dn', n.dnPrice > 0 ? n.dnPrice.toFixed(3) : '—');
-  var ns = document.getElementById('nxt-status');
-  if (n.phase === 'PENDING') ns.innerHTML = '<span style="color:var(--amber)">⏳ Orders placed — BUY UP @ 0.32 AND BUY DOWN @ 0.32</span>';
-  else if (n.phase) ns.innerHTML = '<span style="color:var(--green)">✅ Phase: ' + n.phase + '</span>';
-  else ns.innerHTML = '<span style="color:var(--dim2)">Searching…</span>';
 }
 
 function renderOpen(trades) {
@@ -414,22 +275,17 @@ function renderOpen(trades) {
   if (!trades.length) { el.innerHTML = '<div class="empty">No open trades</div>'; return; }
   var rows = trades.map(function(t) {
     var pnl = t.floatingPnl || 0;
-    var isOracle = t.type === 'ORACLE_ARB';
-    var isRec    = t.type && t.type.indexOf('RECOVERY') >= 0;
-    var col = isOracle ? 'var(--cyan)' : isRec ? 'var(--purple)' : 'var(--amber)';
     return '<tr>' +
       '<td style="color:var(--cyan);font-size:9px">' + t.id + '</td>' +
       '<td class="' + (t.side==='UP'?'pos':'neg') + '">' + t.side + '</td>' +
-      '<td style="color:' + col + ';font-size:9px">' + (t.type||'—') + '</td>' +
       '<td>' + t.entryPrice.toFixed(3) + '</td>' +
-      '<td style="color:var(--red)">' + (t.sl||'—') + '</td>' +
-      '<td style="color:var(--green)">' + t.tp + '</td>' +
+      '<td style="color:var(--dim2);font-size:9px">$' + t.oracleBtcOpen + ' → $' + t.oracleBtcClose + '</td>' +
       '<td>' + t.shares.toFixed(2) + '</td>' +
       '<td>$' + t.cost.toFixed(2) + '</td>' +
       '<td class="' + (pnl>=0?'pos':'neg') + '">' + (pnl>=0?'+':'') + '$' + pnl.toFixed(2) + '</td>' +
       '</tr>';
   }).join('');
-  el.innerHTML = '<table class="tt"><thead><tr><th>ID</th><th>SIDE</th><th>TYPE</th><th>ENTRY</th><th>SL</th><th>TP</th><th>SHARES</th><th>COST</th><th>FLOAT</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  el.innerHTML = '<table class="tt"><thead><tr><th>ID</th><th>SIDE</th><th>ENTRY</th><th>BTC MOVE</th><th>SHARES</th><th>COST</th><th>FLOAT</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
 function renderClosed(trades) {
@@ -437,32 +293,26 @@ function renderClosed(trades) {
   if (!trades.length) { el.innerHTML = '<div class="empty">No closed trades yet</div>'; return; }
   var rows = trades.slice().reverse().map(function(t) {
     var pnl = t.realizedPnl || 0;
-    var rsn = t.exitReason || '—';
-    var isOracle = t.type === 'ORACLE_ARB';
-    var isRec    = t.type && t.type.indexOf('RECOVERY') >= 0;
-    var col = isOracle ? 'var(--cyan)' : isRec ? 'var(--purple)' : 'var(--amber)';
     return '<tr>' +
       '<td style="color:var(--cyan);font-size:9px">' + t.id + '</td>' +
       '<td class="' + (t.side==='UP'?'pos':'neg') + '">' + t.side + '</td>' +
-      '<td style="color:' + col + ';font-size:9px">' + (t.type||'—') + '</td>' +
       '<td>' + t.entryPrice.toFixed(3) + '</td>' +
       '<td>' + (t.exitPrice ? t.exitPrice.toFixed(3) : '—') + '</td>' +
-      '<td style="color:' + (rsn==='TP'?'var(--green)':rsn==='SL'?'var(--red)':'var(--cyan)') + ';font-size:9px">' + rsn + '</td>' +
+      '<td style="color:var(--dim2);font-size:9px">$' + (t.diff||'?') + ' / $' + (t.threshold||'?') + '</td>' +
+      '<td>$' + t.cost.toFixed(2) + '</td>' +
       '<td class="' + (pnl>=0?'pos':'neg') + '">' + (pnl>=0?'+':'') + '$' + pnl.toFixed(2) + '</td>' +
       '</tr>';
   }).join('');
-  el.innerHTML = '<table class="tt"><thead><tr><th>ID</th><th>SIDE</th><th>TYPE</th><th>ENTRY</th><th>EXIT</th><th>REASON</th><th>P&L</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  el.innerHTML = '<table class="tt"><thead><tr><th>ID</th><th>SIDE</th><th>ENTRY</th><th>EXIT</th><th>DIFF/THR</th><th>COST</th><th>P&L</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
 function addLog(line) {
   var el = document.createElement('div');
   var c = 'll';
-  if (line.indexOf('ORACLE') >= 0 || line.indexOf('Chainlink') >= 0 || line.indexOf('🎯') >= 0 || line.indexOf('🚀') >= 0) c += ' oracle';
-  else if (line.indexOf('FILLED') >= 0) c += ' fill';
-  else if (line.indexOf('RECOVERY') >= 0) c += ' rec';
-  else if (line.indexOf('TP') >= 0) c += ' tp';
-  else if (line.indexOf('SL') >= 0) c += ' sl';
-  else if (line.indexOf('✅') >= 0) c += ' inf';
+  if (line.indexOf('ORACLE') >= 0 || line.indexOf('Chainlink') >= 0 || line.indexOf('🎯') >= 0 || line.indexOf('⚡') >= 0 || line.indexOf('🚀') >= 0) c += ' oracle';
+  else if (line.indexOf('🟢') >= 0) c += ' win';
+  else if (line.indexOf('🔴') >= 0) c += ' loss';
+  else if (line.indexOf('✅') >= 0 || line.indexOf('📌') >= 0) c += ' inf';
   el.className = c;
   el.textContent = line;
   var lb = document.getElementById('logb');
