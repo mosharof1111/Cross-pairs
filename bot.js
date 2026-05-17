@@ -19,18 +19,17 @@ const CHAINLINK_ABI = [
 ];
 
 const WINDOW_SIZE      = 300;
-const SIGNAL_INTERVAL  = 30;
+const SIGNAL_INTERVAL  = 15;    // every 15 seconds
 const TRADE_SHARES     = 20;
 const ENTRY_AMOUNT     = 10;
 const HISTORY_WINDOW   = 900;
 const BUCKET_SIZE      = 30;
 const STARTING_BALANCE = 1000;
 
-// ── Three filters ─────────────────────────────────────────────────────────────
-const TOKEN_MIN        = 0.20;  // Filter 1: never buy below this
-const TOKEN_MAX        = 0.80;  // Filter 1: never buy above this
-const MOVE_MULTIPLIER  = 0.50;   // Filter 2: move must be 1.5x avg not just above
-const TREND_BUCKETS    = 3;     // Filter 3: skip if last 3 buckets same direction
+const TOKEN_MIN       = 0.10;   // wider token range
+const TOKEN_MAX       = 0.90;
+const MOVE_MULTIPLIER = 0.5;    // 50% of average — fires more often
+const TREND_BUCKETS   = 3;
 
 let state = { balance: STARTING_BALANCE, openTrades: [], closedTrades: [], totalPnl: 0 };
 const priceBook    = {};
@@ -184,7 +183,6 @@ function getLast30sMove() {
   return { change, absChange: Math.abs(change), direction: change > 0 ? 'UP' : 'DOWN' };
 }
 
-// Filter 3 — check if last N buckets are all same direction (trending)
 function isTrending() {
   const nowSec = Math.floor(Date.now() / 1000);
   const directions = [];
@@ -198,7 +196,6 @@ function isTrending() {
     directions.push(last > first ? 'UP' : 'DOWN');
   }
   if (directions.length < TREND_BUCKETS) return false;
-  // All same direction = trending
   return directions.every(d => d === directions[0]);
 }
 
@@ -211,24 +208,24 @@ function checkSignal() {
   if (!w) return;
   if (priceHistory.length < 10) { log(`⏳ Building history (${priceHistory.length} ticks)…`); return; }
 
-  const avg  = getAverage30sMove();
-  const last = getLast30sMove();
+  const avg      = getAverage30sMove();
+  const last     = getLast30sMove();
+  const required = avg * MOVE_MULTIPLIER;
 
   if (!last.direction || last.absChange === 0) {
     log(`📊 avg=$${avg.toFixed(2)} last=$${last.absChange.toFixed(2)} — no move`);
     return;
   }
 
-  // Filter 2 — move must be 1.5x average
-  const required = avg * MOVE_MULTIPLIER;
+  // Filter 2 — move must exceed 0.5x average
   if (last.absChange <= required) {
-    log(`📊 avg=$${avg.toFixed(2)} last=${last.direction} $${last.absChange.toFixed(2)} need=$${required.toFixed(2)} — below 1.5x threshold`);
+    log(`📊 avg=$${avg.toFixed(2)} last=${last.direction} $${last.absChange.toFixed(2)} need=$${required.toFixed(2)} — below threshold`);
     return;
   }
 
-  // Filter 3 — skip if trending (last 3 buckets same direction)
+  // Filter 3 — skip if trending
   if (isTrending()) {
-    log(`📊 avg=$${avg.toFixed(2)} last=${last.direction} $${last.absChange.toFixed(2)} — ⚠️ TRENDING, skipping reversion`);
+    log(`📊 avg=$${avg.toFixed(2)} last=${last.direction} $${last.absChange.toFixed(2)} — ⚠️ TRENDING, skipping`);
     return;
   }
 
@@ -236,13 +233,13 @@ function checkSignal() {
   const token    = reversed === 'UP' ? w.btcUp : w.btcDn;
   const price    = getPrice(token);
 
-  // Filter 1 — token must be between 0.20 and 0.80
+  // Filter 1 — token must be 0.10-0.90
   if (price < TOKEN_MIN || price > TOKEN_MAX) {
-    log(`📊 avg=$${avg.toFixed(2)} last=${last.direction} $${last.absChange.toFixed(2)} — ⚠️ token=${price.toFixed(3)} outside 0.20-0.80 range, skip`);
+    log(`📊 avg=$${avg.toFixed(2)} last=${last.direction} $${last.absChange.toFixed(2)} — ⚠️ token=${price.toFixed(3)} outside 0.10-0.90, skip`);
     return;
   }
 
-  log(`📊 avg=$${avg.toFixed(2)} | last=${last.direction} $${last.absChange.toFixed(2)} > 1.5x=$${required.toFixed(2)} | not trending | token=${price.toFixed(3)} ✅ FIRING`);
+  log(`📊 avg=$${avg.toFixed(2)} | last=${last.direction} $${last.absChange.toFixed(2)} > 0.5x=$${required.toFixed(2)} | not trending | token=${price.toFixed(3)} ✅ FIRING`);
   placeTrade(w, reversed, last.absChange, avg, required);
 }
 
@@ -268,7 +265,7 @@ function placeTrade(w, direction, move, avg, required) {
   if (!windowState[cws]) windowState[cws] = { trades: 0 };
   windowState[cws].trades++;
   saveState();
-  log(`🚀 REVERSION ${direction} [${id}] token=${price.toFixed(3)} shares=${TRADE_SHARES} cost=$${cost} | $${move.toFixed(2)} > 1.5x=$${required.toFixed(2)} | bal=$${state.balance.toFixed(2)}`);
+  log(`🚀 REVERSION ${direction} [${id}] token=${price.toFixed(3)} shares=${TRADE_SHARES} cost=$${cost} | $${move.toFixed(2)} > 0.5x=$${required.toFixed(2)} | bal=$${state.balance.toFixed(2)}`);
   emitFn('snapshot', buildDashboardSnapshot());
 }
 
@@ -438,8 +435,8 @@ function buildDashboardSnapshot() {
   const wst    = windowState[cws] || {};
   const upPrice = w ? getPrice(w.btcUp) : 0;
   const dnPrice = w ? getPrice(w.btcDn) : 0;
-  const avg     = getAverage30sMove();
-  const last    = getLast30sMove();
+  const avg      = getAverage30sMove();
+  const last     = getLast30sMove();
   const trending = isTrending();
   const required = avg * MOVE_MULTIPLIER;
   return {
@@ -493,8 +490,8 @@ async function tick() {
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
-  log('🚀 BTC Mean Reversion Bot — filters: token 0.20-0.80 | 1.5x avg | no trend');
-  log(`   History: ${HISTORY_WINDOW/60}min | bucket: ${BUCKET_SIZE}s | $${ENTRY_AMOUNT}/trade`);
+  log('🚀 BTC Mean Reversion — 0.5x avg | 15s interval | token 0.10-0.90 | no trend');
+  log(`   History: ${HISTORY_WINDOW/60}min | bucket: ${BUCKET_SIZE}s | $${ENTRY_AMOUNT}/trade | 20 shares`);
   loadState();
   await fetchInitialChainlinkPrice();
   connectBinance();
