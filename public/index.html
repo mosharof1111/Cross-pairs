@@ -28,7 +28,6 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
 .ph h3{font-size:9px;font-weight:700;letter-spacing:2px;color:var(--dim2);text-transform:uppercase;}
 .ph .badge{font-size:10px;color:var(--cyan);font-weight:700;}
 .wb{padding:14px;}
-/* Timer */
 .timer-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
 .big-timer{font-family:'Bebas Neue';font-size:48px;letter-spacing:2px;line-height:1;}
 .big-timer.g{color:var(--green);}
@@ -39,39 +38,18 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
 .prog{height:100%;border-radius:2px;}
 .prog.ok{background:linear-gradient(90deg,var(--green),var(--cyan));}
 .prog.warn{background:linear-gradient(90deg,var(--amber),var(--red));}
-/* Price row */
 .price-row{display:flex;gap:8px;margin-bottom:12px;}
-.pcell{flex:1;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:4px;padding:10px 12px;transition:border-color .3s;}
-.pcell.active{border-color:var(--green);}
-.pcell.lost{border-color:var(--red);}
+.pcell{flex:1;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:4px;padding:10px 12px;}
 .pcell label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:5px;}
 .pcell .pval{font-size:26px;font-weight:700;}
 .pcell .pval.up{color:var(--green);}
 .pcell .pval.dn{color:var(--red);}
-.pcell .psub{font-size:9px;color:var(--dim2);margin-top:3px;}
-/* Phase badge */
 .phase-badge{display:inline-block;padding:4px 12px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:12px;}
 .phase-PENDING{border:1px solid var(--amber);color:var(--amber);background:rgba(255,179,0,0.08);}
 .phase-FILLED{border:1px solid var(--green);color:var(--green);background:rgba(0,230,118,0.08);}
 .phase-RECOVERY{border:1px solid var(--purple);color:var(--purple);background:rgba(179,136,255,0.08);}
 .phase-RECOVERY_WAIT{border:1px solid var(--cyan);color:var(--cyan);background:rgba(0,207,255,0.08);}
-.phase-CLOSED{border:1px solid var(--dim);color:var(--dim2);background:rgba(255,255,255,0.03);}
-/* Trade cards */
-.trade-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;}
-@media(max-width:500px){.trade-grid{grid-template-columns:1fr;}}
-.tcard{border-radius:5px;border:1px solid var(--border);padding:10px 12px;}
-.tcard.first-up{border-color:var(--green);}
-.tcard.first-dn{border-color:var(--red);}
-.tcard.recovery{border-color:var(--purple);}
-.tcard.closed{border-color:var(--dim);opacity:.6;}
-.tcard.cancelled{border-color:var(--dim);opacity:.4;}
-.tc-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
-.tc-title{font-size:9px;font-weight:700;letter-spacing:1px;}
-.tc-status{font-size:9px;}
-.tc-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px;}
-.tc-item label{display:block;font-size:7px;color:var(--dim2);letter-spacing:1px;margin-bottom:1px;}
-.tc-item value{display:block;font-size:12px;font-weight:700;}
-/* Limit order display */
+.phase-CLOSED{border:1px solid var(--dim);color:var(--dim2);}
 .limit-orders{display:flex;gap:8px;margin-bottom:12px;}
 .lo{flex:1;border-radius:4px;border:1px solid var(--border);padding:8px 10px;text-align:center;}
 .lo.active{border-color:var(--amber);background:rgba(255,179,0,0.06);}
@@ -82,20 +60,25 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
 .lo-price.up{color:var(--green);}
 .lo-price.dn{color:var(--red);}
 .lo-status{font-size:9px;margin-top:3px;}
-/* SL/TP lines */
+.tcard{border-radius:5px;border:1px solid var(--border);padding:10px 12px;margin-bottom:8px;}
+.tcard.first-up{border-color:var(--green);}
+.tcard.first-dn{border-color:var(--red);}
+.tcard.recovery-active{border-color:var(--purple);}
+.tcard.recovery-closed{border-color:var(--dim);opacity:.6;}
+.tc-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+.tc-title{font-size:9px;font-weight:700;letter-spacing:1px;}
+.tc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;}
+.tc-item label{display:block;font-size:7px;color:var(--dim2);letter-spacing:1px;margin-bottom:1px;}
+.tc-item value{display:block;font-size:12px;font-weight:700;}
 .sltp-row{display:flex;gap:6px;margin-top:8px;}
 .sltp-pill{flex:1;padding:4px 8px;border-radius:3px;text-align:center;font-size:10px;font-weight:700;}
 .sl-pill{border:1px solid var(--red);color:var(--red);background:rgba(255,61,90,0.08);}
 .tp-pill{border:1px solid var(--green);color:var(--green);background:rgba(0,230,118,0.08);}
-/* Next window */
-.next-card{background:rgba(255,179,0,0.03);border:1px solid rgba(255,179,0,0.2);border-radius:5px;padding:10px 12px;}
-.next-head{font-size:9px;color:var(--amber);letter-spacing:1px;font-weight:700;margin-bottom:8px;}
-/* Stats */
+.rec-count{font-size:10px;color:var(--purple);margin-bottom:8px;font-weight:700;}
 .sbar{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--border);}
 .sbi{background:var(--panel2);padding:8px;text-align:center;}
 .sbi label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:3px;}
 .sbi value{display:block;font-size:14px;font-weight:700;}
-/* Table */
 .tt{width:100%;border-collapse:collapse;}
 .tt th{padding:5px 8px;font-size:8px;color:var(--dim2);letter-spacing:1px;border-bottom:1px solid var(--border);text-align:left;}
 .tt td{padding:5px 8px;border-bottom:1px solid rgba(28,42,58,0.4);font-size:10px;}
@@ -118,7 +101,7 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
 <header>
   <div>
     <div class="brand">BTC <em>SNIPER</em> BOT</div>
-    <div class="sub">LIMIT@0.32 · SL=0.05 · RECOVERY@0.89 · TP=0.99 · $10 ENTRY</div>
+    <div class="sub">LIMIT@0.32 · SL=0.05 · RECOVERY@0.65 · TP=0.99 · UNLIMITED RECOVERIES</div>
   </div>
   <div class="hstats">
     <div class="hstat"><label>BALANCE</label><div class="val" id="h-bal">$—</div></div>
@@ -128,76 +111,44 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
   </div>
 </header>
 <main>
-
-  <!-- Current window -->
   <div class="panel">
     <div class="ph"><h3>Live Window</h3><div class="badge" id="w-ts">—</div></div>
     <div class="wb">
       <div class="timer-row">
         <div class="big-timer d" id="timer">—:——</div>
-        <div style="text-align:right;font-size:10px;color:var(--dim2)">
-          Elapsed: <span id="w-el">—</span>s<br>
-          Updated: <span id="w-upd">—</span>
-        </div>
+        <div style="text-align:right;font-size:10px;color:var(--dim2)">Elapsed: <span id="w-el">—</span>s<br>Updated: <span id="w-upd">—</span></div>
       </div>
       <div class="prog-wrap"><div class="prog ok" id="prog" style="width:0%"></div></div>
-
-      <!-- Prices -->
       <div class="price-row">
-        <div class="pcell" id="cell-up">
-          <label>BTC ↑ UP</label>
-          <div class="pval up" id="p-up">—</div>
-          <div class="psub" id="sub-up">—</div>
-        </div>
-        <div class="pcell" id="cell-dn">
-          <label>BTC ↓ DOWN</label>
-          <div class="pval dn" id="p-dn">—</div>
-          <div class="psub" id="sub-dn">—</div>
-        </div>
+        <div class="pcell"><label>BTC ↑ UP</label><div class="pval up" id="p-up">—</div></div>
+        <div class="pcell"><label>BTC ↓ DOWN</label><div class="pval dn" id="p-dn">—</div></div>
       </div>
-
-      <!-- Phase -->
       <div id="phase-badge" class="phase-badge phase-PENDING">PENDING</div>
-
-      <!-- Limit orders -->
       <div class="limit-orders">
         <div class="lo active" id="lo-up">
           <div class="lo-label">BUY UP LIMIT</div>
           <div class="lo-price up">0.320</div>
-          <div class="lo-status" id="lo-up-status">Waiting…</div>
+          <div class="lo-status" id="lo-up-st">Waiting…</div>
         </div>
         <div class="lo active" id="lo-dn">
           <div class="lo-label">BUY DOWN LIMIT</div>
           <div class="lo-price dn">0.320</div>
-          <div class="lo-status" id="lo-dn-status">Waiting…</div>
+          <div class="lo-status" id="lo-dn-st">Waiting…</div>
         </div>
       </div>
-
-      <!-- Trade cards -->
-      <div class="trade-grid" id="trade-cards"></div>
-
+      <div id="trade-cards"></div>
     </div>
   </div>
-
-  <!-- Next window -->
   <div class="panel">
     <div class="ph"><h3>Pre-Market (Next Window)</h3><div class="badge" id="nxt-ts">—</div></div>
     <div class="wb">
       <div class="price-row">
-        <div class="pcell">
-          <label>BTC ↑ UP</label>
-          <div class="pval up" id="nxt-up">—</div>
-        </div>
-        <div class="pcell">
-          <label>BTC ↓ DOWN</label>
-          <div class="pval dn" id="nxt-dn">—</div>
-        </div>
+        <div class="pcell"><label>BTC ↑ UP</label><div class="pval up" id="nxt-up">—</div></div>
+        <div class="pcell"><label>BTC ↓ DOWN</label><div class="pval dn" id="nxt-dn">—</div></div>
       </div>
-      <div id="nxt-status" style="font-size:10px;color:var(--amber)">Searching for next window…</div>
+      <div id="nxt-status" style="font-size:10px;color:var(--amber)">Searching…</div>
     </div>
   </div>
-
-  <!-- Stats -->
   <div class="panel">
     <div class="ph"><h3>Session Stats</h3></div>
     <div class="sbar">
@@ -209,30 +160,22 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:900px;ma
       <div class="sbi"><label>NET P&L</label><value id="st-pnl">$0</value></div>
     </div>
   </div>
-
-  <!-- Open trades -->
   <div class="panel">
     <div class="ph"><h3>Open Trades</h3><div class="badge" id="oc">0</div></div>
     <div id="open-t"><div class="empty">No open trades</div></div>
   </div>
-
-  <!-- Closed trades -->
   <div class="panel">
     <div class="ph"><h3>Closed Trades</h3><div class="badge" id="cc">0</div></div>
     <div id="closed-t"><div class="empty">No closed trades yet</div></div>
   </div>
-
-  <!-- Log -->
   <div class="panel">
     <div class="ph"><h3>System Log</h3><div class="badge" id="lc">0</div></div>
     <div id="logb"></div>
   </div>
-
 </main>
 <script>
 var socket = io();
 var logCount = 0;
-var lastSnap = null;
 
 socket.on('connect',    function(){ document.getElementById('wsdot').classList.remove('off'); });
 socket.on('disconnect', function(){ document.getElementById('wsdot').classList.add('off'); });
@@ -240,13 +183,12 @@ socket.on('disconnect', function(){ document.getElementById('wsdot').classList.a
 socket.on('prices', function(p) {
   if (p.upPrice) set('p-up', p.upPrice.toFixed(3));
   if (p.dnPrice) set('p-dn', p.dnPrice.toFixed(3));
-  if (p.nextUpPrice) set('nxt-up', p.nextUpPrice > 0 ? p.nextUpPrice.toFixed(3) : '—');
-  if (p.nextDnPrice) set('nxt-dn', p.nextDnPrice > 0 ? p.nextDnPrice.toFixed(3) : '—');
+  if (p.nextUpPrice !== undefined) set('nxt-up', p.nextUpPrice > 0 ? p.nextUpPrice.toFixed(3) : '—');
+  if (p.nextDnPrice !== undefined) set('nxt-dn', p.nextDnPrice > 0 ? p.nextDnPrice.toFixed(3) : '—');
   set('w-upd', new Date().toLocaleTimeString());
 });
 
 socket.on('snapshot', function(d) {
-  lastSnap = d;
   set('h-bal', '$' + d.balance.toFixed(2));
   set('h-open', d.openTrades.length);
   set('oc', d.openTrades.length);
@@ -254,22 +196,20 @@ socket.on('snapshot', function(d) {
   var pe = document.getElementById('h-pnl');
   pe.textContent = (d.totalPnl >= 0 ? '+$' : '-$') + Math.abs(d.totalPnl).toFixed(2);
   pe.className = 'val' + (d.totalPnl > 0 ? ' pos' : d.totalPnl < 0 ? ' neg' : '');
-
   var cl = d.closedTrades;
-  var wins   = cl.filter(function(t){ return t.exitReason === 'TP' || t.exitReason === 'RESOLVED' && (t.realizedPnl||0) > 0; });
-  var losses = cl.filter(function(t){ return t.exitReason === 'SL' || t.exitReason === 'RESOLVED' && (t.realizedPnl||0) < 0; });
   var profit = cl.filter(function(t){return (t.realizedPnl||0)>0;}).reduce(function(s,t){return s+(t.realizedPnl||0);},0);
   var loss   = cl.filter(function(t){return (t.realizedPnl||0)<0;}).reduce(function(s,t){return s+(t.realizedPnl||0);},0);
+  var tpHits = cl.filter(function(t){return t.exitReason==='TP';}).length;
+  var slHits = cl.filter(function(t){return t.exitReason==='SL';}).length;
   var windows = new Set(cl.map(function(t){return t.windowStart;})).size;
   set('st-win', windows);
-  set('st-tp', wins.length);
-  set('st-sl', losses.length);
+  set('st-tp', tpHits);
+  set('st-sl', slHits);
   set('st-profit', '+$' + profit.toFixed(2));
   set('st-loss', '-$' + Math.abs(loss).toFixed(2));
   var spnl = document.getElementById('st-pnl');
   spnl.textContent = (d.totalPnl >= 0 ? '+$' : '-$') + Math.abs(d.totalPnl).toFixed(2);
   spnl.style.color = d.totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
-
   if (d.current) renderCurrentWindow(d.current);
   if (d.next)    renderNextWindow(d.next);
   renderOpen(d.openTrades);
@@ -279,7 +219,7 @@ socket.on('snapshot', function(d) {
 socket.on('log', function(line){ addLog(line); });
 
 function set(id, v){ var e = document.getElementById(id); if(e) e.textContent = v; }
-function fmt(n){ return n > 0 ? Number(n).toFixed(3) : '—'; }
+function fmt(n){ return (n && n > 0) ? Number(n).toFixed(3) : '—'; }
 
 function renderCurrentWindow(c) {
   set('w-ts', 'ws:' + c.windowStart);
@@ -295,100 +235,66 @@ function renderCurrentWindow(c) {
   set('p-up', fmt(c.upPrice));
   set('p-dn', fmt(c.dnPrice));
   set('w-el', c.elapsed);
-
   var wst = c.wst;
   if (!wst) {
-    set('sub-up', ''); set('sub-dn', '');
     document.getElementById('phase-badge').textContent = 'NO POSITION';
     document.getElementById('phase-badge').className = 'phase-badge phase-PENDING';
-    document.getElementById('lo-up').className = 'lo';
-    document.getElementById('lo-dn').className = 'lo';
     document.getElementById('trade-cards').innerHTML = '';
     return;
   }
-
-  // Phase badge
   var pb2 = document.getElementById('phase-badge');
   pb2.textContent = wst.phase || 'PENDING';
   pb2.className = 'phase-badge phase-' + (wst.phase || 'PENDING');
-
-  // Limit orders
   var loUp = document.getElementById('lo-up');
   var loDn = document.getElementById('lo-dn');
   if (wst.filledSide === 'UP') {
-    loUp.className = 'lo filled';
-    loDn.className = 'lo cancelled';
-    set('lo-up-status', '✅ FILLED @ 0.320');
-    set('lo-dn-status', '❌ Cancelled');
+    loUp.className = 'lo filled'; loDn.className = 'lo cancelled';
+    set('lo-up-st', '✅ FILLED'); set('lo-dn-st', '❌ Cancelled');
   } else if (wst.filledSide === 'DOWN') {
-    loDn.className = 'lo filled';
-    loUp.className = 'lo cancelled';
-    set('lo-dn-status', '✅ FILLED @ 0.320');
-    set('lo-up-status', '❌ Cancelled');
+    loDn.className = 'lo filled'; loUp.className = 'lo cancelled';
+    set('lo-dn-st', '✅ FILLED'); set('lo-up-st', '❌ Cancelled');
   } else {
     loUp.className = 'lo ' + (wst.upCancelled ? 'cancelled' : 'active');
     loDn.className = 'lo ' + (wst.dnCancelled ? 'cancelled' : 'active');
-    set('lo-up-status', wst.upCancelled ? '❌ Cancelled' : '⏳ Waiting price ≤ 0.320');
-    set('lo-dn-status', wst.dnCancelled ? '❌ Cancelled' : '⏳ Waiting price ≤ 0.320');
+    set('lo-up-st', wst.upCancelled ? '❌ Cancelled' : '⏳ Waiting ≤ 0.320');
+    set('lo-dn-st', wst.dnCancelled ? '❌ Cancelled' : '⏳ Waiting ≤ 0.320');
   }
-
-  // Price sub-labels
-  if (wst.firstTrade && !wst.firstTrade.closed) {
-    var ft = wst.firstTrade;
-    var subEl = ft.side === 'UP' ? 'sub-up' : 'sub-dn';
-    set(subEl, 'SL:' + ft.sl + ' TP:' + ft.tp + ' | ' + (ft.floatingPnl >= 0 ? '+' : '') + '$' + (ft.floatingPnl||0).toFixed(2));
-  }
-  if (wst.recoveryTrade && !wst.recoveryTrade.closed) {
-    var rt = wst.recoveryTrade;
-    var subEl2 = rt.side === 'UP' ? 'sub-up' : 'sub-dn';
-    set(subEl2, 'REC SL:' + rt.sl + ' TP:' + rt.tp + ' | ' + (rt.floatingPnl >= 0 ? '+' : '') + '$' + (rt.floatingPnl||0).toFixed(2));
-  }
-
-  // Trade cards
   var cards = '';
   if (wst.firstTrade) {
     var ft = wst.firstTrade;
-    var cls = ft.closed ? 'closed' : (ft.side === 'UP' ? 'first-up' : 'first-dn');
+    var cls = ft.closed ? 'tcard recovery-closed' : (ft.side === 'UP' ? 'tcard first-up' : 'tcard first-dn');
     var fpnl = ft.floatingPnl || 0;
-    cards += '<div class="tcard ' + cls + '">' +
-      '<div class="tc-head">' +
-        '<span class="tc-title" style="color:' + (ft.side==='UP'?'var(--green)':'var(--red)') + '">FIRST POSITION · ETH ' + ft.side + '</span>' +
-        '<span class="tc-status" style="color:' + (ft.closed?'var(--dim2)':'var(--amber)') + '">' + (ft.closed?'CLOSED':'OPEN') + '</span>' +
-      '</div>' +
+    cards += '<div class="' + cls + '">' +
+      '<div class="tc-head"><span class="tc-title" style="color:' + (ft.side==='UP'?'var(--green)':'var(--red)') + '">FIRST · BTC ' + ft.side + '</span>' +
+      '<span style="font-size:9px;color:' + (ft.closed?'var(--dim2)':'var(--amber)') + '">' + (ft.closed?'CLOSED':'OPEN') + '</span></div>' +
       '<div class="tc-grid">' +
         '<div class="tc-item"><label>ENTRY</label><value>' + ft.entryPrice.toFixed(3) + '</value></div>' +
         '<div class="tc-item"><label>SHARES</label><value>' + ft.shares.toFixed(2) + '</value></div>' +
         '<div class="tc-item"><label>COST</label><value>$' + ft.cost.toFixed(2) + '</value></div>' +
-        '<div class="tc-item"><label>FLOAT P&L</label><value class="' + (fpnl>=0?'pos':'neg') + '">' + (fpnl>=0?'+':'') + '$' + fpnl.toFixed(2) + '</value></div>' +
+        '<div class="tc-item"><label>FLOAT</label><value class="' + (fpnl>=0?'pos':'neg') + '">' + (fpnl>=0?'+':'') + '$' + fpnl.toFixed(2) + '</value></div>' +
       '</div>' +
-      '<div class="sltp-row">' +
-        '<div class="sltp-pill sl-pill">SL ' + ft.sl + '</div>' +
-        '<div class="sltp-pill tp-pill">TP ' + ft.tp + '</div>' +
-      '</div>' +
+      '<div class="sltp-row"><div class="sltp-pill sl-pill">SL ' + ft.sl + '</div><div class="sltp-pill tp-pill">TP ' + ft.tp + '</div></div>' +
     '</div>';
   }
-  if (wst.recoveryTrade) {
-    var rt = wst.recoveryTrade;
-    var cls2 = rt.closed ? 'closed' : 'recovery';
-    var rpnl = rt.floatingPnl || 0;
-    cards += '<div class="tcard ' + cls2 + '">' +
-      '<div class="tc-head">' +
-        '<span class="tc-title" style="color:var(--purple)">RECOVERY · ETH ' + rt.side + '</span>' +
-        '<span class="tc-status" style="color:' + (rt.closed?'var(--dim2)':'var(--purple)') + '">' + (rt.closed?'CLOSED':'OPEN') + '</span>' +
-      '</div>' +
-      '<div class="tc-grid">' +
-        '<div class="tc-item"><label>ENTRY</label><value>' + rt.entryPrice.toFixed(3) + '</value></div>' +
-        '<div class="tc-item"><label>SHARES</label><value>' + rt.shares.toFixed(2) + '</value></div>' +
-        '<div class="tc-item"><label>COST</label><value>$' + rt.cost.toFixed(2) + '</value></div>' +
-        '<div class="tc-item"><label>FLOAT P&L</label><value class="' + (rpnl>=0?'pos':'neg') + '">' + (rpnl>=0?'+':'') + '$' + rpnl.toFixed(2) + '</value></div>' +
-      '</div>' +
-      '<div class="sltp-row">' +
-        '<div class="sltp-pill sl-pill">SL ' + rt.sl + '</div>' +
-        '<div class="sltp-pill tp-pill">TP ' + rt.tp + '</div>' +
-      '</div>' +
-    '</div>';
+  if (wst.recoveries && wst.recoveries.length > 0) {
+    cards += '<div class="rec-count">🔄 ' + wst.recoveries.length + ' RECOVER' + (wst.recoveries.length===1?'Y':'IES') + '</div>';
+    wst.recoveries.forEach(function(rec) {
+      var rcls = rec.closed ? 'tcard recovery-closed' : 'tcard recovery-active';
+      var rpnl = rec.floatingPnl || 0;
+      cards += '<div class="' + rcls + '">' +
+        '<div class="tc-head"><span class="tc-title" style="color:var(--purple)">RECOVERY#' + rec.num + ' · BTC ' + rec.side + '</span>' +
+        '<span style="font-size:9px;color:' + (rec.closed?'var(--dim2)':'var(--purple)') + '">' + (rec.closed?'CLOSED':'OPEN') + '</span></div>' +
+        '<div class="tc-grid">' +
+          '<div class="tc-item"><label>ENTRY</label><value>' + rec.entryPrice.toFixed(3) + '</value></div>' +
+          '<div class="tc-item"><label>SHARES</label><value>' + rec.shares.toFixed(2) + '</value></div>' +
+          '<div class="tc-item"><label>COST</label><value>$' + rec.cost.toFixed(2) + '</value></div>' +
+          '<div class="tc-item"><label>FLOAT</label><value class="' + (rpnl>=0?'pos':'neg') + '">' + (rpnl>=0?'+':'') + '$' + rpnl.toFixed(2) + '</value></div>' +
+        '</div>' +
+        '<div class="sltp-row"><div class="sltp-pill sl-pill">SL ' + rec.sl + '</div><div class="sltp-pill tp-pill">TP ' + rec.tp + '</div></div>' +
+      '</div>';
+    });
   }
-  document.getElementById('trade-cards').innerHTML = cards || '<div style="color:var(--dim2);font-size:10px">Waiting for limit fill…</div>';
+  document.getElementById('trade-cards').innerHTML = cards || '<div style="color:var(--dim2);font-size:10px;margin-top:6px">Waiting for limit fill…</div>';
 }
 
 function renderNextWindow(n) {
@@ -396,13 +302,9 @@ function renderNextWindow(n) {
   set('nxt-up', n.upPrice > 0 ? n.upPrice.toFixed(3) : '—');
   set('nxt-dn', n.dnPrice > 0 ? n.dnPrice.toFixed(3) : '—');
   var ns = document.getElementById('nxt-status');
-  if (n.phase === 'PENDING') {
-    ns.innerHTML = '<span style="color:var(--amber)">⏳ Limit orders placed — BUY UP @ 0.32 AND BUY DOWN @ 0.32</span>';
-  } else if (n.phase) {
-    ns.innerHTML = '<span style="color:var(--green)">✅ Phase: ' + n.phase + '</span>';
-  } else {
-    ns.innerHTML = '<span style="color:var(--dim2)">Searching…</span>';
-  }
+  if (n.phase === 'PENDING') ns.innerHTML = '<span style="color:var(--amber)">⏳ Orders placed — BUY UP @ 0.32 AND BUY DOWN @ 0.32</span>';
+  else if (n.phase) ns.innerHTML = '<span style="color:var(--green)">✅ Phase: ' + n.phase + '</span>';
+  else ns.innerHTML = '<span style="color:var(--dim2)">Searching…</span>';
 }
 
 function renderOpen(trades) {
@@ -413,7 +315,7 @@ function renderOpen(trades) {
     return '<tr>' +
       '<td style="color:var(--cyan);font-size:9px">' + t.id + '</td>' +
       '<td class="' + (t.side==='UP'?'pos':'neg') + '">' + t.side + '</td>' +
-      '<td style="color:' + (t.type==='RECOVERY'?'var(--purple)':'var(--amber)') + '">' + (t.type||'—') + '</td>' +
+      '<td style="color:' + (t.type&&t.type.indexOf('RECOVERY')>=0?'var(--purple)':'var(--amber)') + ';font-size:9px">' + (t.type||'—') + '</td>' +
       '<td>' + t.entryPrice.toFixed(3) + '</td>' +
       '<td style="color:var(--red)">' + t.sl + '</td>' +
       '<td style="color:var(--green)">' + t.tp + '</td>' +
@@ -434,7 +336,7 @@ function renderClosed(trades) {
     return '<tr>' +
       '<td style="color:var(--cyan);font-size:9px">' + t.id + '</td>' +
       '<td class="' + (t.side==='UP'?'pos':'neg') + '">' + t.side + '</td>' +
-      '<td style="color:' + (t.type==='RECOVERY'?'var(--purple)':'var(--amber)') + '">' + (t.type||'—') + '</td>' +
+      '<td style="color:' + (t.type&&t.type.indexOf('RECOVERY')>=0?'var(--purple)':'var(--amber)') + ';font-size:9px">' + (t.type||'—') + '</td>' +
       '<td>' + t.entryPrice.toFixed(3) + '</td>' +
       '<td>' + (t.exitPrice ? t.exitPrice.toFixed(3) : '—') + '</td>' +
       '<td style="color:' + (rsn==='TP'?'var(--green)':rsn==='SL'?'var(--red)':'var(--cyan)') + ';font-size:9px">' + rsn + '</td>' +
