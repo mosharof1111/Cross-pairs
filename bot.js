@@ -29,7 +29,7 @@ const STARTING_BALANCE = 1000;
 // ── Three filters ─────────────────────────────────────────────────────────────
 const TOKEN_MIN        = 0.20;  // Filter 1: never buy below this
 const TOKEN_MAX        = 0.80;  // Filter 1: never buy above this
-const MOVE_MULTIPLIER  = 1.5;   // Filter 2: move must be 1.5x avg not just above
+const MOVE_MULTIPLIER  = 0.50;   // Filter 2: move must be 1.5x avg not just above
 const TREND_BUCKETS    = 3;     // Filter 3: skip if last 3 buckets same direction
 
 let state = { balance: STARTING_BALANCE, openTrades: [], closedTrades: [], totalPnl: 0 };
