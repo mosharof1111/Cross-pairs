@@ -10,7 +10,6 @@ const GAMMA      = 'https://gamma-api.polymarket.com';
 const CLOB_REST  = 'https://clob.polymarket.com';
 const TRADES_FILE = path.join(__dirname, 'trades.json');
 
-// ── Price sources ─────────────────────────────────────────────────────────────
 const BINANCE_WS        = 'wss://stream.binance.com:9443/ws/btcusdt@aggTrade';
 const QUICKNODE_WSS     = 'wss://magical-thrumming-darkness.matic.quiknode.pro/1200504c2577a6812ec891b7f3ea2c5e4ee2bc55/';
 const CHAINLINK_BTC_USD = '0xc907E116054Ad103354f2D350FD2514433D57F6f';
@@ -21,8 +20,8 @@ const CHAINLINK_ABI = [
 
 const WINDOW_SIZE        = 300;
 const ORACLE_ARB_AMOUNT  = 50;
-const ORACLE_ARB_TRIGGER = 30;   // act in final 30 seconds only
-const ORACLE_MIN_EDGE    = 0.35; // only buy if token price below this
+const ORACLE_ARB_TRIGGER = 30;
+const ORACLE_MIN_EDGE    = 0.35;
 const STARTING_BALANCE   = 1000;
 
 let state = { balance: STARTING_BALANCE, openTrades: [], closedTrades: [], totalPnl: 0 };
@@ -30,13 +29,12 @@ const priceBook   = {};
 const marketCache = {};
 const windowState = {};
 
-// Price state — two sources
-let binanceBtcPrice    = 0;  // raw from Binance, updates every trade
-let chainlinkBtcPrice  = 0;  // from Chainlink on-chain
+let binanceBtcPrice    = 0;
+let chainlinkBtcPrice  = 0;
 let chainlinkUpdatedAt = 0;
-let confirmedBtcPrice  = 0;  // the price we trust most — Binance primary
-let windowOpenBtcPrice = {}; // ts -> price at window open
-let priceHistory       = []; // [{ts, price, source}] last 30 min
+let confirmedBtcPrice  = 0;
+let windowOpenBtcPrice = {};
+let priceHistory       = [];
 
 let emitFn = () => {};
 let logFn  = () => {};
@@ -73,10 +71,10 @@ function getPrice(tid) {
   return b.bid || b.ask || 0;
 }
 
-// ── Binance WebSocket — primary price source ──────────────────────────────────
-let binanceWs = null;
+// ── Binance WebSocket — PRIMARY trigger ───────────────────────────────────────
+let binanceWs        = null;
+let binanceLastLog   = 0;
 let binanceLastPrice = 0;
-let binanceLogThrottle = 0;
 
 function connectBinance() {
   if (binanceWs) { try { binanceWs.terminate(); } catch(_){} }
@@ -84,30 +82,29 @@ function connectBinance() {
   binanceWs = new WebSocket(BINANCE_WS);
 
   binanceWs.on('open', () => {
-    log('✅ Binance WS connected — live BTC price stream active');
+    log('✅ Binance WS connected — live BTC feed active');
   });
 
   binanceWs.on('message', (raw) => {
     try {
-      const msg  = JSON.parse(raw);
+      const msg   = JSON.parse(raw);
       const price = parseFloat(msg.p);
       if (!price || price <= 0) return;
 
-      binanceBtcPrice = price;
-      confirmedBtcPrice = price; // Binance is primary
+      binanceBtcPrice   = price;
+      confirmedBtcPrice = price;
 
-      // Log only when price changes by $1+
       const nowSec = Math.floor(Date.now() / 1000);
-      if (Math.abs(price - binanceLastPrice) >= 1 && nowSec - binanceLogThrottle >= 5) {
+      if (Math.abs(price - binanceLastPrice) >= 1 && nowSec - binanceLastLog >= 5) {
         const change = price - binanceLastPrice;
         log(`💹 Binance BTC = $${price.toFixed(2)} (${change >= 0 ? '+' : ''}$${change.toFixed(2)})`);
         binanceLastPrice = price;
-        binanceLogThrottle = nowSec;
+        binanceLastLog   = nowSec;
       }
 
       pushPriceHistory(price, 'binance');
       recordWindowOpenPrice();
-      checkOracleArb();
+      checkOracleArb();  // fire on every Binance update
     } catch (_) {}
   });
 
@@ -116,21 +113,19 @@ function connectBinance() {
     setTimeout(connectBinance, 3000);
   });
 
-  binanceWs.on('error', (e) => {
-    log(`⚠️  Binance WS error: ${e.message}`);
-  });
+  binanceWs.on('error', e => log(`⚠️  Binance WS: ${e.message}`));
 }
 
-// ── Chainlink WebSocket — secondary confirmation source ───────────────────────
+// ── Chainlink WebSocket — LABEL ONLY, never blocks trade ─────────────────────
 let chainlinkWs = null;
 
 function connectChainlink() {
   if (chainlinkWs) { try { chainlinkWs.terminate(); } catch(_){} }
-  log('🔗 Connecting Chainlink via QuickNode…');
+  log('🔗 Connecting Chainlink via QuickNode (label only)…');
   chainlinkWs = new WebSocket(QUICKNODE_WSS);
 
   chainlinkWs.on('open', () => {
-    log('✅ QuickNode WS connected — subscribing to Chainlink logs…');
+    log('✅ QuickNode WS connected — Chainlink subscription active');
     chainlinkWs.send(JSON.stringify({
       jsonrpc: '2.0', id: 1,
       method: 'eth_subscribe',
@@ -141,43 +136,34 @@ function connectChainlink() {
     }));
   });
 
-  chainlinkWs.on('message', async (raw) => {
+  chainlinkWs.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);
       if (msg.id === 1 && msg.result) {
-        log(`✅ Chainlink subscription confirmed: ${msg.result}`);
+        log(`✅ Chainlink log subscription confirmed: ${msg.result}`);
         return;
       }
       if (msg.method === 'eth_subscription' && msg.params?.result) {
-        const logData = msg.params.result;
+        const logData  = msg.params.result;
         const priceBig = BigInt(logData.topics[1]);
-        const MAX_INT256 = BigInt('0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
-        const price = priceBig > MAX_INT256
+        const MAX = BigInt('0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
+        const price = priceBig > MAX
           ? Number(priceBig - BigInt('0x10000000000000000000000000000000000000000000000000000000000000000')) / 1e8
           : Number(priceBig) / 1e8;
-
         if (price > 0 && price < 1000000) {
-          const oldPrice = chainlinkBtcPrice;
+          const old = chainlinkBtcPrice;
           chainlinkBtcPrice  = price;
           chainlinkUpdatedAt = Math.floor(Date.now() / 1000);
-          const change = price - oldPrice;
-          log(`⛓️  Chainlink BTC = $${price.toFixed(2)} (${change >= 0 ? '+' : ''}$${change.toFixed(2)}) | Binance=$${binanceBtcPrice.toFixed(2)}`);
-
-          // Check if Chainlink confirms Binance direction — strongest signal
+          const change = price - old;
           const cws = currentWindowStart();
-          const openPrice = windowOpenBtcPrice[cws];
-          if (openPrice && binanceBtcPrice > 0) {
-            const binanceDir   = binanceBtcPrice > openPrice ? 'UP' : 'DOWN';
-            const chainlinkDir = price > openPrice ? 'UP' : 'DOWN';
-            if (binanceDir === chainlinkDir) {
-              log(`🔥 DUAL CONFIRMATION: Binance + Chainlink both say ${binanceDir}`);
-            }
-          }
+          const op  = windowOpenBtcPrice[cws] || 0;
+          const agrees = op > 0 && confirmedBtcPrice > 0 &&
+            ((confirmedBtcPrice > op && price > op) || (confirmedBtcPrice < op && price < op));
+          log(`⛓️  Chainlink BTC = $${price.toFixed(2)} (${change >= 0 ? '+' : ''}$${change.toFixed(2)}) | ${agrees ? '🔥 confirms Binance' : '—'}`);
           pushPriceHistory(price, 'chainlink');
-          checkOracleArb();
         }
       }
-    } catch (e) { log(`⚠️  Chainlink msg parse: ${e.message}`); }
+    } catch (_) {}
   });
 
   chainlinkWs.on('close', () => {
@@ -185,12 +171,9 @@ function connectChainlink() {
     setTimeout(connectChainlink, 5000);
   });
 
-  chainlinkWs.on('error', (e) => {
-    log(`⚠️  QuickNode WS error: ${e.message}`);
-  });
+  chainlinkWs.on('error', e => log(`⚠️  QuickNode WS: ${e.message}`));
 }
 
-// Get initial Chainlink price via HTTP
 async function fetchInitialChainlinkPrice() {
   try {
     const provider = new ethers.providers.JsonRpcProvider(
@@ -201,12 +184,10 @@ async function fetchInitialChainlinkPrice() {
     chainlinkBtcPrice  = data.answer.toNumber() / 1e8;
     chainlinkUpdatedAt = data.updatedAt.toNumber();
     log(`📡 Initial Chainlink BTC = $${chainlinkBtcPrice.toFixed(2)}`);
-  } catch (e) {
-    log(`⚠️  Initial Chainlink fetch: ${e.message}`);
-  }
+  } catch (e) { log(`⚠️  Initial Chainlink: ${e.message}`); }
 }
 
-// ── Price history & threshold ─────────────────────────────────────────────────
+// ── Price history & dynamic threshold ────────────────────────────────────────
 function pushPriceHistory(price, source) {
   if (price <= 0) return;
   const nowSec = Math.floor(Date.now() / 1000);
@@ -225,14 +206,13 @@ function recordWindowOpenPrice() {
 function getDynamicThreshold() {
   const MIN    = 5;
   const nowSec = Math.floor(Date.now() / 1000);
-  // Use Binance price history only — more granular
-  const binanceHistory = priceHistory.filter(h => h.source === 'binance');
-  if (binanceHistory.length < 10) return MIN;
+  const hist   = priceHistory.filter(h => h.source === 'binance');
+  if (hist.length < 10) return MIN;
   const moves = [];
   for (let i = 0; i < 6; i++) {
     const wEnd   = nowSec - i * WINDOW_SIZE;
     const wStart = wEnd - WINDOW_SIZE;
-    const slice  = binanceHistory.filter(h => h.ts >= wStart && h.ts <= wEnd);
+    const slice  = hist.filter(h => h.ts >= wStart && h.ts <= wEnd);
     if (slice.length < 2) continue;
     const prices = slice.map(h => h.price);
     const move   = Math.abs(Math.max(...prices) - Math.min(...prices));
@@ -243,19 +223,16 @@ function getDynamicThreshold() {
   return +Math.max(MIN, avg * 0.5).toFixed(2);
 }
 
-// ── Oracle arb logic ──────────────────────────────────────────────────────────
+// ── Oracle arb — Binance fires independently ──────────────────────────────────
 let lastArbCheck = 0;
 
 function checkOracleArb() {
   const nowSec    = Math.floor(Date.now() / 1000);
-  // Throttle — max once per second
   if (nowSec - lastArbCheck < 1) return;
   lastArbCheck = nowSec;
 
   const cws       = currentWindowStart();
   const remaining = WINDOW_SIZE - (nowSec - cws);
-
-  // Only act in final ORACLE_ARB_TRIGGER seconds
   if (remaining > ORACLE_ARB_TRIGGER || remaining < 3) return;
 
   const w = marketCache[cws];
@@ -267,25 +244,25 @@ function checkOracleArb() {
   const wst = windowState[cws] || {};
   if (wst.oracleArbPlaced) return;
 
-  const btcWentUp  = confirmedBtcPrice > openPrice;
-  const diff       = Math.abs(confirmedBtcPrice - openPrice);
-  const threshold  = getDynamicThreshold();
+  const btcWentUp = confirmedBtcPrice > openPrice;
+  const diff      = Math.abs(confirmedBtcPrice - openPrice);
+  const threshold = getDynamicThreshold();
 
-  if (diff < threshold) return; // silent skip — Binance logs are already verbose
-
-  // Check if Chainlink agrees — dual confirmation is stronger signal
-  const chainlinkAgrees = chainlinkBtcPrice > 0 &&
-    ((btcWentUp && chainlinkBtcPrice > openPrice) ||
-     (!btcWentUp && chainlinkBtcPrice < openPrice));
+  if (diff < threshold) return;
 
   const label        = btcWentUp ? 'UP' : 'DOWN';
   const winningToken = btcWentUp ? w.btcUp : w.btcDn;
   const winningPrice = getPrice(winningToken);
 
-  log(`🎯 SIGNAL: BTC $${openPrice.toFixed(2)} → $${confirmedBtcPrice.toFixed(2)} = ${label} | diff=$${diff.toFixed(2)} thr=$${threshold.toFixed(2)} | chainlink=${chainlinkAgrees ? '✅ AGREES' : '⚠️ no confirm'} | token=${winningPrice.toFixed(3)} | ${remaining}s left`);
+  // Chainlink agreement — label only, never blocks
+  const chainlinkAgrees = chainlinkBtcPrice > 0 &&
+    ((btcWentUp && chainlinkBtcPrice > openPrice) ||
+     (!btcWentUp && chainlinkBtcPrice < openPrice));
+
+  log(`🎯 SIGNAL: BTC $${openPrice.toFixed(2)} → $${confirmedBtcPrice.toFixed(2)} = ${label} | diff=$${diff.toFixed(2)} thr=$${threshold.toFixed(2)} | chainlink=${chainlinkAgrees ? '🔥' : '—'} | token=${winningPrice.toFixed(3)} | ${remaining}s left`);
 
   if (winningPrice <= 0 || winningPrice > ORACLE_MIN_EDGE) {
-    log(`⚠️  Token at ${winningPrice.toFixed(3)} > ${ORACLE_MIN_EDGE} — too late, market already moved`);
+    log(`⚠️  Token at ${winningPrice.toFixed(3)} > ${ORACLE_MIN_EDGE} — market already moved`);
     return;
   }
 
@@ -300,7 +277,7 @@ function checkOracleArb() {
     entryPrice: winningPrice, tp: 0.99, sl: 0,
     shares: +shares.toFixed(4), cost: ORACLE_ARB_AMOUNT,
     openedAt: new Date().toISOString(), floatingPnl: 0,
-    btcOpen: openPrice, btcClose: confirmedBtcPrice,
+    btcOpen: openPrice, btcClose: +confirmedBtcPrice.toFixed(2),
     diff: +diff.toFixed(2), threshold: +threshold.toFixed(2),
     chainlinkConfirmed: chainlinkAgrees,
   };
@@ -309,7 +286,7 @@ function checkOracleArb() {
   windowState[cws].oracleArbPlaced = true;
   windowState[cws].oracleArbId    = id;
   saveState();
-  log(`🚀 ORACLE ARB ${label} [${id}] Binance=$${confirmedBtcPrice.toFixed(2)} ${chainlinkAgrees ? '+ Chainlink✅' : ''} token=${winningPrice.toFixed(3)} shares=${shares.toFixed(2)} cost=$${ORACLE_ARB_AMOUNT} ${remaining}s left bal=$${state.balance.toFixed(2)}`);
+  log(`🚀 ORACLE ARB ${label} [${id}] Binance=$${confirmedBtcPrice.toFixed(2)} ${chainlinkAgrees ? '+ Chainlink🔥' : ''} token=${winningPrice.toFixed(3)} shares=${shares.toFixed(2)} cost=$${ORACLE_ARB_AMOUNT} ${remaining}s left bal=$${state.balance.toFixed(2)}`);
   emitFn('snapshot', buildDashboardSnapshot());
 }
 
@@ -472,31 +449,31 @@ function updateFloating() {
 }
 
 function buildDashboardSnapshot() {
-  const cws    = currentWindowStart();
-  const nowSec = Math.floor(Date.now() / 1000);
-  const w      = marketCache[cws];
-  const wst    = windowState[cws] || {};
+  const cws     = currentWindowStart();
+  const nowSec  = Math.floor(Date.now() / 1000);
+  const w       = marketCache[cws];
+  const wst     = windowState[cws] || {};
   const upPrice = w ? getPrice(w.btcUp) : 0;
   const dnPrice = w ? getPrice(w.btcDn) : 0;
   const openPrice = windowOpenBtcPrice[cws] || 0;
   const diff = openPrice ? +(confirmedBtcPrice - openPrice).toFixed(2) : null;
+  const chainlinkAgrees = chainlinkBtcPrice > 0 && openPrice > 0 && diff !== null &&
+    ((diff > 0 && chainlinkBtcPrice > openPrice) || (diff < 0 && chainlinkBtcPrice < openPrice));
   return {
     balance:      +state.balance.toFixed(2),
     totalPnl:     +state.totalPnl.toFixed(2),
     openTrades:   state.openTrades,
     closedTrades: state.closedTrades.slice(-50),
     oracle: {
-      binancePrice:   +binanceBtcPrice.toFixed(2),
-      chainlinkPrice: +chainlinkBtcPrice.toFixed(2),
-      confirmedPrice: +confirmedBtcPrice.toFixed(2),
-      updatedAt:      chainlinkUpdatedAt,
-      windowOpen:     openPrice ? +openPrice.toFixed(2) : null,
-      direction:      diff !== null ? (diff > 0 ? 'UP' : diff < 0 ? 'DOWN' : 'FLAT') : null,
+      binancePrice:    +binanceBtcPrice.toFixed(2),
+      chainlinkPrice:  +chainlinkBtcPrice.toFixed(2),
+      confirmedPrice:  +confirmedBtcPrice.toFixed(2),
+      updatedAt:       chainlinkUpdatedAt,
+      windowOpen:      openPrice ? +openPrice.toFixed(2) : null,
+      direction:       diff !== null ? (diff > 0 ? 'UP' : diff < 0 ? 'DOWN' : 'FLAT') : null,
       diff,
-      threshold:      +getDynamicThreshold().toFixed(2),
-      chainlinkAgrees: chainlinkBtcPrice > 0 && openPrice > 0
-        ? (diff > 0 ? chainlinkBtcPrice > openPrice : chainlinkBtcPrice < openPrice)
-        : false,
+      threshold:       +getDynamicThreshold().toFixed(2),
+      chainlinkAgrees,
     },
     window: w ? {
       windowStart:     cws,
@@ -530,7 +507,7 @@ async function tick() {
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
-  log('🚀 BTC Oracle Arb — Binance (primary) + Chainlink (confirmation)');
+  log('🚀 BTC Oracle Arb — Binance primary (independent) + Chainlink label');
   log(`   $${ORACLE_ARB_AMOUNT}/signal | final ${ORACLE_ARB_TRIGGER}s | edge<${ORACLE_MIN_EDGE} | dynamic threshold`);
   loadState();
   await fetchInitialChainlinkPrice();
@@ -551,9 +528,11 @@ async function start(emit, logEmit) {
   }, 2000);
   log(`💰 Balance: $${state.balance.toFixed(2)}`);
 }
+
 function stop() {
   clearInterval(timer);
-  if (binanceWs)    { try { binanceWs.terminate();    } catch(_){} }
-  if (chainlinkWs)  { try { chainlinkWs.terminate();  } catch(_){} }
+  if (binanceWs)   { try { binanceWs.terminate();   } catch(_){} }
+  if (chainlinkWs) { try { chainlinkWs.terminate(); } catch(_){} }
 }
+
 module.exports = { start, stop, buildDashboardSnapshot };
