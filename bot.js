@@ -14,12 +14,12 @@ const WINDOW_SIZE        = 300;
 const ENTRY_PRICE        = 0.32;
 const ENTRY_AMOUNT       = 10;
 const FIRST_SL           = 0.05;
-const RECOVERY_TRIGGER   = 0.89;
-const RECOVERY_PRICE     = 0.89;
+const RECOVERY_TRIGGER   = 0.65;
+const RECOVERY_PRICE     = 0.65;
 const RECOVERY_TP        = 0.99;
 const RECOVERY_SL        = 0.45;
 const FIRST_TP           = 0.99;
-const RECOVERY_TARGET    = 15;   // $10 recover loss + $5 profit
+const RECOVERY_TARGET    = 15;
 const STARTING_BALANCE   = 1000;
 
 let state = { balance: STARTING_BALANCE, openTrades: [], closedTrades: [], totalPnl: 0 };
@@ -172,18 +172,25 @@ async function placePreMarketOrders(ts) {
     phase: 'PENDING',
     filledSide: null,
     firstTrade: null,
-    recoveryTrade: null,
+    // recoveries is an array — multiple recoveries allowed
+    recoveries: [],
     upLimitPrice: ENTRY_PRICE,
     dnLimitPrice: ENTRY_PRICE,
     upCancelled: false,
     dnCancelled: false,
     resolved: false,
+    // track if opposite side has gone below recovery trigger after last recovery closed
+    recoveryArmed: false,
   };
   log(`📋 PRE-MARKET ts=${ts} | BUY UP @ ${ENTRY_PRICE} AND BUY DOWN @ ${ENTRY_PRICE}`);
   emitFn('snapshot', buildDashboardSnapshot());
 }
 
 function tradeId() { return `T${Date.now().toString(36).toUpperCase()}`; }
+
+function activeRecovery(wst) {
+  return wst.recoveries.find(r => !r.closed) || null;
+}
 
 function checkWindow(w) {
   const wst = windowState[w.windowStart];
@@ -192,24 +199,27 @@ function checkWindow(w) {
   const dnPrice = getPrice(w.btcDn);
   if (!upPrice || !dnPrice) return;
 
-  // Update floating pnl
+  // Update floating pnl for first trade
   if (wst.firstTrade && !wst.firstTrade.closed) {
     const fp = wst.filledSide === 'UP' ? upPrice : dnPrice;
     wst.firstTrade.floatingPnl = +((fp - wst.firstTrade.entryPrice) * wst.firstTrade.shares).toFixed(4);
     const ot = state.openTrades.find(t => t.id === wst.firstTrade.id);
     if (ot) ot.floatingPnl = wst.firstTrade.floatingPnl;
   }
-  if (wst.recoveryTrade && !wst.recoveryTrade.closed) {
-    const rp = wst.filledSide === 'UP' ? dnPrice : upPrice;
-    wst.recoveryTrade.floatingPnl = +((rp - wst.recoveryTrade.entryPrice) * wst.recoveryTrade.shares).toFixed(4);
-    const ot = state.openTrades.find(t => t.id === wst.recoveryTrade.id);
-    if (ot) ot.floatingPnl = wst.recoveryTrade.floatingPnl;
+
+  // Update floating pnl for active recovery
+  const ar = activeRecovery(wst);
+  if (ar) {
+    const rp = ar.side === 'UP' ? upPrice : dnPrice;
+    ar.floatingPnl = +((rp - ar.entryPrice) * ar.shares).toFixed(4);
+    const ot = state.openTrades.find(t => t.id === ar.id);
+    if (ot) ot.floatingPnl = ar.floatingPnl;
   }
 
-  if (wst.phase === 'PENDING')        checkLimitFills(w, wst, upPrice, dnPrice);
-  if (wst.phase === 'FILLED')         checkFirstPosition(w, wst, upPrice, dnPrice);
-  if (wst.phase === 'RECOVERY')       checkRecoveryPosition(w, wst, upPrice, dnPrice);
-  if (wst.phase === 'RECOVERY_WAIT')  checkRecoveryTrigger(w, wst, upPrice, dnPrice);
+  if (wst.phase === 'PENDING')       checkLimitFills(w, wst, upPrice, dnPrice);
+  if (wst.phase === 'FILLED')        checkFirstPosition(w, wst, upPrice, dnPrice);
+  if (wst.phase === 'RECOVERY')      checkRecoveryPosition(w, wst, upPrice, dnPrice);
+  if (wst.phase === 'RECOVERY_WAIT') checkRecoveryTrigger(w, wst, upPrice, dnPrice);
 }
 
 function checkLimitFills(w, wst, upPrice, dnPrice) {
@@ -220,7 +230,7 @@ function checkLimitFills(w, wst, upPrice, dnPrice) {
 function fillFirst(w, wst, side, price) {
   if (state.balance < ENTRY_AMOUNT) { log(`💸 Low balance`); return; }
   const shares = ENTRY_AMOUNT / price;
-  const id     = tradeId();
+  const id = tradeId();
   wst.filledSide = side;
   wst.phase      = 'FILLED';
   if (side === 'UP') { wst.dnCancelled = true; log(`❌ Cancelled DN limit`); }
@@ -239,17 +249,23 @@ function checkFirstPosition(w, wst, upPrice, dnPrice) {
   const curPrice = ft.side === 'UP' ? upPrice : dnPrice;
   const oppPrice = ft.side === 'UP' ? dnPrice : upPrice;
   if (curPrice >= ft.tp) { closeFirstPosition(w, wst, ft.tp, 'TP'); return; }
-  if (curPrice <= ft.sl) { closeFirstPosition(w, wst, ft.sl, 'SL'); return; }
-  if (!wst.recoveryTrade && oppPrice >= RECOVERY_TRIGGER) { placeRecovery(w, wst, oppPrice); }
+  if (curPrice <= ft.sl) { closeFirstPosition(w, wst, ft.sl, 'SL'); }
+  // Check recovery trigger — opposite side reaches 0.65
+  if (!activeRecovery(wst) && oppPrice >= RECOVERY_TRIGGER) {
+    placeRecovery(w, wst, oppPrice);
+  }
 }
 
 function checkRecoveryTrigger(w, wst, upPrice, dnPrice) {
   const oppPrice = wst.filledSide === 'UP' ? dnPrice : upPrice;
-  if (!wst.recoveryTrade && oppPrice >= RECOVERY_TRIGGER) { placeRecovery(w, wst, oppPrice); }
+  if (!activeRecovery(wst) && oppPrice >= RECOVERY_TRIGGER) {
+    placeRecovery(w, wst, oppPrice);
+  }
 }
 
 function closeFirstPosition(w, wst, exitPrice, reason) {
   const ft      = wst.firstTrade;
+  if (ft.closed) return;
   const proceeds = exitPrice * ft.shares;
   const pnl     = proceeds - ft.cost;
   state.balance  += proceeds;
@@ -259,48 +275,72 @@ function closeFirstPosition(w, wst, exitPrice, reason) {
   state.closedTrades.push({ id: ft.id, windowStart: w.windowStart, side: ft.side, type: 'FIRST', entryPrice: ft.entryPrice, exitPrice, shares: ft.shares, cost: ft.cost, proceeds: +proceeds.toFixed(2), realizedPnl: +pnl.toFixed(4), closedAt: new Date().toISOString(), exitReason: reason });
   saveState();
   log(`${pnl >= 0 ? '🟢' : '🔴'} FIRST ${reason} ${ft.side} [${ft.id}] entry=${ft.entryPrice.toFixed(3)} exit=${exitPrice.toFixed(3)} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
-  if (!wst.recoveryTrade) wst.phase = 'RECOVERY_WAIT';
+  if (!activeRecovery(wst)) wst.phase = 'RECOVERY_WAIT';
 }
 
 function placeRecovery(w, wst, oppPrice) {
-  // shares × (RECOVERY_TP - oppPrice) = RECOVERY_TARGET ($15 = $10 loss + $5 profit)
-  const profitPerShare = RECOVERY_TP - oppPrice;
-  if (profitPerShare <= 0) { log(`⚠️  Recovery profit per share <= 0`); return; }
+  // Use fixed RECOVERY_PRICE (0.65) not live price for consistent math
+  const buyPrice       = Math.min(oppPrice, RECOVERY_PRICE);
+  const profitPerShare = RECOVERY_TP - buyPrice;
+  if (profitPerShare <= 0) { log(`⚠️  Recovery profit <= 0`); return; }
   const shares       = RECOVERY_TARGET / profitPerShare;
-  const recoveryCost = +(shares * oppPrice).toFixed(2);
+  const recoveryCost = +(shares * buyPrice).toFixed(2);
   if (state.balance < recoveryCost) { log(`💸 Low balance for recovery — need $${recoveryCost.toFixed(2)}`); return; }
   const recoverySide = wst.filledSide === 'UP' ? 'DOWN' : 'UP';
   const id           = tradeId();
-  wst.recoveryTrade  = { id, side: recoverySide, entryPrice: oppPrice, shares: +shares.toFixed(4), cost: recoveryCost, sl: RECOVERY_SL, tp: RECOVERY_TP, closed: false, floatingPnl: 0 };
-  wst.phase          = 'RECOVERY';
-  state.balance     -= recoveryCost;
-  const trade = { id, windowStart: w.windowStart, side: recoverySide, type: 'RECOVERY', entryPrice: oppPrice, sl: RECOVERY_SL, tp: RECOVERY_TP, shares: +shares.toFixed(4), cost: recoveryCost, openedAt: new Date().toISOString(), floatingPnl: 0 };
+  const recNum       = wst.recoveries.length + 1;
+  const rec = { id, side: recoverySide, entryPrice: buyPrice, shares: +shares.toFixed(4), cost: recoveryCost, sl: RECOVERY_SL, tp: RECOVERY_TP, closed: false, floatingPnl: 0, num: recNum };
+  wst.recoveries.push(rec);
+  wst.phase = 'RECOVERY';
+  state.balance -= recoveryCost;
+  const trade = { id, windowStart: w.windowStart, side: recoverySide, type: `RECOVERY#${recNum}`, entryPrice: buyPrice, sl: RECOVERY_SL, tp: RECOVERY_TP, shares: +shares.toFixed(4), cost: recoveryCost, openedAt: new Date().toISOString(), floatingPnl: 0 };
   state.openTrades.push(trade);
   saveState();
-  log(`🔄 RECOVERY ${recoverySide} [${id}] @ ${oppPrice.toFixed(3)} shares=${shares.toFixed(2)} cost=$${recoveryCost.toFixed(2)} target=$${RECOVERY_TARGET} (recover $${ENTRY_AMOUNT} + $5 profit) sl=${RECOVERY_SL} tp=${RECOVERY_TP} bal=$${state.balance.toFixed(2)}`);
+  log(`🔄 RECOVERY#${recNum} ${recoverySide} [${id}] @ ${buyPrice.toFixed(3)} shares=${shares.toFixed(2)} cost=$${recoveryCost.toFixed(2)} target=$${RECOVERY_TARGET} sl=${RECOVERY_SL} tp=${RECOVERY_TP} bal=$${state.balance.toFixed(2)}`);
   emitFn('trade_entered', trade);
 }
 
 function checkRecoveryPosition(w, wst, upPrice, dnPrice) {
-  const rt = wst.recoveryTrade;
-  if (!rt || rt.closed) return;
-  const curPrice = rt.side === 'UP' ? upPrice : dnPrice;
-  if (curPrice >= rt.tp) { closeRecovery(w, wst, rt.tp, 'TP'); return; }
-  if (curPrice <= rt.sl) { closeRecovery(w, wst, rt.sl, 'SL'); return; }
+  const ar = activeRecovery(wst);
+  if (!ar) { wst.phase = wst.firstTrade?.closed ? 'RECOVERY_WAIT' : 'FILLED'; return; }
+  const curPrice = ar.side === 'UP' ? upPrice : dnPrice;
+  const oppPrice = ar.side === 'UP' ? dnPrice : upPrice;
+
+  if (curPrice >= ar.tp) {
+    closeRecovery(w, wst, ar, ar.tp, 'TP');
+    // After TP — if first trade still open, go back to FILLED phase to watch it
+    // Also re-arm for another recovery if opposite drops back to 0.65
+    wst.phase = wst.firstTrade && !wst.firstTrade.closed ? 'FILLED' : 'RECOVERY_WAIT';
+    return;
+  }
+  if (curPrice <= ar.sl) {
+    closeRecovery(w, wst, ar, ar.sl, 'SL');
+    wst.phase = wst.firstTrade && !wst.firstTrade.closed ? 'FILLED' : 'RECOVERY_WAIT';
+    return;
+  }
+
+  // Check if another recovery needed while this one is open — NO, only one active at a time
+  // But check first position TP/SL while recovery is running
+  if (wst.firstTrade && !wst.firstTrade.closed) {
+    const fp = wst.filledSide === 'UP' ? upPrice : dnPrice;
+    if (fp >= wst.firstTrade.tp) closeFirstPosition(w, wst, wst.firstTrade.tp, 'TP');
+    else if (fp <= wst.firstTrade.sl) closeFirstPosition(w, wst, wst.firstTrade.sl, 'SL');
+  }
+
+  // Check if opposite drops back to trigger again for NEXT recovery after this closes
+  // (handled after close above)
 }
 
-function closeRecovery(w, wst, exitPrice, reason) {
-  const rt      = wst.recoveryTrade;
-  const proceeds = exitPrice * rt.shares;
-  const pnl     = proceeds - rt.cost;
+function closeRecovery(w, wst, rec, exitPrice, reason) {
+  const proceeds = exitPrice * rec.shares;
+  const pnl     = proceeds - rec.cost;
   state.balance  += proceeds;
   state.totalPnl += pnl;
-  rt.closed = true;
-  state.openTrades = state.openTrades.filter(t => t.id !== rt.id);
-  state.closedTrades.push({ id: rt.id, windowStart: w.windowStart, side: rt.side, type: 'RECOVERY', entryPrice: rt.entryPrice, exitPrice, shares: rt.shares, cost: rt.cost, proceeds: +proceeds.toFixed(2), realizedPnl: +pnl.toFixed(4), closedAt: new Date().toISOString(), exitReason: reason });
-  wst.phase = 'CLOSED';
+  rec.closed = true;
+  state.openTrades = state.openTrades.filter(t => t.id !== rec.id);
+  state.closedTrades.push({ id: rec.id, windowStart: w.windowStart, side: rec.side, type: `RECOVERY#${rec.num}`, entryPrice: rec.entryPrice, exitPrice, shares: rec.shares, cost: rec.cost, proceeds: +proceeds.toFixed(2), realizedPnl: +pnl.toFixed(4), closedAt: new Date().toISOString(), exitReason: reason });
   saveState();
-  log(`${pnl >= 0 ? '🟢' : '🔴'} RECOVERY ${reason} ${rt.side} [${rt.id}] entry=${rt.entryPrice.toFixed(3)} exit=${exitPrice.toFixed(3)} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
+  log(`${pnl >= 0 ? '🟢' : '🔴'} RECOVERY#${rec.num} ${reason} ${rec.side} [${rec.id}] entry=${rec.entryPrice.toFixed(3)} exit=${exitPrice.toFixed(3)} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
 }
 
 async function checkResolution() {
@@ -331,7 +371,9 @@ async function checkResolution() {
     state.openTrades = state.openTrades.filter(t => t.windowStart !== ts);
     wst.resolved = true;
     saveState();
-    log(`📊 SUMMARY ts=${ts} windowPnl=$${windowPnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
+    const totalRec = wst.recoveries.length;
+    const recTP = wst.recoveries.filter(r => r.closed).length;
+    log(`📊 SUMMARY ts=${ts} recoveries=${totalRec} tp=${recTP} windowPnl=$${windowPnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
     delete marketCache[ts];
   }
 }
@@ -389,7 +431,15 @@ function buildDashboardSnapshot() {
       remaining: Math.max(0, WINDOW_SIZE - (nowSec - cws)),
       upPrice:   +getPrice(curW.btcUp).toFixed(3),
       dnPrice:   +getPrice(curW.btcDn).toFixed(3),
-      wst: curWst ? { phase: curWst.phase, filledSide: curWst.filledSide, upCancelled: curWst.upCancelled, dnCancelled: curWst.dnCancelled, firstTrade: curWst.firstTrade, recoveryTrade: curWst.recoveryTrade } : null,
+      wst: curWst ? {
+        phase:       curWst.phase,
+        filledSide:  curWst.filledSide,
+        upCancelled: curWst.upCancelled,
+        dnCancelled: curWst.dnCancelled,
+        firstTrade:  curWst.firstTrade,
+        recoveries:  curWst.recoveries,
+        activeRecovery: activeRecovery(curWst),
+      } : null,
     } : null,
     next: nextW ? {
       windowStart: nextWs,
@@ -423,7 +473,7 @@ async function tick() {
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
-  log('🚀 BTC 5m Sniper — limit@0.32 SL=0.05 Recovery@0.89 TP=0.99 target=$5 profit');
+  log('🚀 BTC 5m Sniper — limit@0.32 SL=0.05 Recovery@0.65 TP=0.99 unlimited recoveries');
   loadState(); connectWS(); await tick();
   timer = setInterval(tick, 5000);
   setInterval(async function() {
