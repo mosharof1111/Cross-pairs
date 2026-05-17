@@ -1,7 +1,7 @@
 {
   "name": "polymarket-arb-bot",
   "version": "1.0.0",
-  "description": "Polymarket BTC Sniper + Oracle Arb Bot",
+  "description": "BTC Oracle Arb Bot",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
