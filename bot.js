@@ -12,15 +12,18 @@ const TRADES_FILE = path.join(__dirname, 'trades.json');
 
 const QUICKNODE_WSS     = 'wss://magical-thrumming-darkness.matic.quiknode.pro/1200504c2577a6812ec891b7f3ea2c5e4ee2bc55/';
 const CHAINLINK_BTC_USD = '0xc907E116054Ad103354f2D350FD2514433D57F6f';
+
+// AnswerUpdated(int256,uint256,uint256) topic
+const ANSWER_UPDATED_TOPIC = '0x0559884fd3a460db3073b7fc896cc77986f16e378210ded43186175bf646fc5f';
+
 const CHAINLINK_ABI = [
-  'event AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)',
   'function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
 ];
 
 const WINDOW_SIZE        = 300;
-const ORACLE_ARB_AMOUNT  = 50;    // $ per signal
-const ORACLE_ARB_TRIGGER = 90;    // seconds before window end
-const ORACLE_MIN_EDGE    = 0.30;  // only buy if token price below this
+const ORACLE_ARB_AMOUNT  = 50;
+const ORACLE_ARB_TRIGGER = 90;
+const ORACLE_MIN_EDGE    = 0.30;
 const STARTING_BALANCE   = 1000;
 
 let state = { balance: STARTING_BALANCE, openTrades: [], closedTrades: [], totalPnl: 0 };
@@ -32,8 +35,8 @@ let chainlinkBtcPrice  = 0;
 let chainlinkUpdatedAt = 0;
 let windowOpenBtcPrice = {};
 let chainlinkHistory   = [];
+let oracleWs           = null;
 let oracleProvider     = null;
-let oracleFeed         = null;
 
 let emitFn = () => {};
 let logFn  = () => {};
@@ -70,37 +73,91 @@ function getPrice(tid) {
   return b.bid || b.ask || 0;
 }
 
-// ── Chainlink Oracle ──────────────────────────────────────────────────────────
-async function connectOracle() {
+// ── Chainlink via raw WebSocket eth_subscribe ─────────────────────────────────
+// This bypasses ethers event system and subscribes directly to Polygon logs
+// giving us the fastest possible notification of a new Chainlink price
+function connectOracleWs() {
+  if (oracleWs) { try { oracleWs.terminate(); } catch(_){} }
+
+  log('🔗 Connecting Chainlink raw WS subscription…');
+  oracleWs = new WebSocket(QUICKNODE_WSS);
+
+  oracleWs.on('open', () => {
+    log('✅ QuickNode WS open — subscribing to Chainlink logs…');
+    // Subscribe to logs from the Chainlink BTC/USD contract
+    oracleWs.send(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'eth_subscribe',
+      params: ['logs', {
+        address: CHAINLINK_BTC_USD,
+        topics: [ANSWER_UPDATED_TOPIC],
+      }],
+    }));
+  });
+
+  oracleWs.on('message', async (raw) => {
+    try {
+      const msg = JSON.parse(raw);
+
+      // Subscription confirmed
+      if (msg.id === 1 && msg.result) {
+        log(`✅ Chainlink log subscription confirmed: ${msg.result}`);
+        return;
+      }
+
+      // New log event received
+      if (msg.method === 'eth_subscription' && msg.params?.result) {
+        const logData = msg.params.result;
+        // Decode price from topics[1] — it's the int256 'current' value
+        const priceBig = BigInt(logData.topics[1]);
+        // Handle negative (signed int256)
+        const MAX_INT256 = BigInt('0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
+        const price = priceBig > MAX_INT256
+          ? Number(priceBig - BigInt('0x10000000000000000000000000000000000000000000000000000000000000000')) / 1e8
+          : Number(priceBig) / 1e8;
+
+        if (price > 0 && price < 1000000) {
+          const oldPrice = chainlinkBtcPrice;
+          chainlinkBtcPrice = price;
+          chainlinkUpdatedAt = Math.floor(Date.now() / 1000);
+          const change = price - oldPrice;
+          pushChainlinkHistory();
+          recordWindowOpenPrice();
+          const threshold = getDynamicThreshold();
+          log(`⚡ Chainlink LOG BTC/USD = $${price.toFixed(2)} (${change >= 0 ? '+' : ''}$${change.toFixed(2)}) | threshold=$${threshold.toFixed(2)}`);
+          checkOracleArb();
+          emitFn('snapshot', buildDashboardSnapshot());
+        }
+      }
+    } catch (e) { log(`⚠️  WS message parse: ${e.message}`); }
+  });
+
+  oracleWs.on('close', () => {
+    log('⚡ QuickNode WS closed — reconnecting in 3s…');
+    setTimeout(connectOracleWs, 3000);
+  });
+
+  oracleWs.on('error', (e) => {
+    log(`⚠️  QuickNode WS error: ${e.message}`);
+  });
+}
+
+// Get initial price via HTTP JSON-RPC call
+async function fetchInitialPrice() {
   try {
-    log('🔗 Connecting Chainlink BTC/USD via QuickNode…');
-    oracleProvider = new ethers.providers.WebSocketProvider(QUICKNODE_WSS);
-    oracleFeed     = new ethers.Contract(CHAINLINK_BTC_USD, CHAINLINK_ABI, oracleProvider);
-    const data = await oracleFeed.latestRoundData();
+    oracleProvider = new ethers.providers.JsonRpcProvider(
+      QUICKNODE_WSS.replace('wss://', 'https://')
+    );
+    const feed = new ethers.Contract(CHAINLINK_BTC_USD, CHAINLINK_ABI, oracleProvider);
+    const data = await feed.latestRoundData();
     chainlinkBtcPrice  = data.answer.toNumber() / 1e8;
     chainlinkUpdatedAt = data.updatedAt.toNumber();
     pushChainlinkHistory();
     recordWindowOpenPrice();
-    log(`✅ Chainlink connected — BTC/USD = $${chainlinkBtcPrice.toFixed(2)}`);
-    oracleFeed.on('AnswerUpdated', (current, roundId, updatedAt) => {
-      const newPrice = current.toNumber() / 1e8;
-      const oldPrice = chainlinkBtcPrice;
-      chainlinkBtcPrice  = newPrice;
-      chainlinkUpdatedAt = updatedAt.toNumber();
-      const change = newPrice - oldPrice;
-      pushChainlinkHistory();
-      const threshold = getDynamicThreshold();
-      log(`⚡ Chainlink BTC/USD = $${newPrice.toFixed(2)} (${change >= 0 ? '+' : ''}$${change.toFixed(2)}) | threshold=$${threshold.toFixed(2)}`);
-      checkOracleArb();
-    });
-    oracleProvider._websocket.on('close', () => {
-      log('⚡ QuickNode WS closed — reconnecting in 5s…');
-      setTimeout(connectOracle, 5000);
-    });
-    oracleProvider._websocket.on('error', e => log(`⚠️  QuickNode: ${e.message}`));
+    log(`📡 Initial Chainlink BTC/USD = $${chainlinkBtcPrice.toFixed(2)}`);
   } catch (e) {
-    log(`⚠️  Oracle error: ${e.message} — retry in 10s`);
-    setTimeout(connectOracle, 10000);
+    log(`⚠️  Initial price fetch error: ${e.message}`);
   }
 }
 
@@ -153,9 +210,9 @@ function checkOracleArb() {
   const wst = windowState[cws] || {};
   if (wst.oracleArbPlaced) return;
 
-  const btcWentUp  = chainlinkBtcPrice > openPrice;
-  const diff       = Math.abs(chainlinkBtcPrice - openPrice);
-  const threshold  = getDynamicThreshold();
+  const btcWentUp = chainlinkBtcPrice > openPrice;
+  const diff      = Math.abs(chainlinkBtcPrice - openPrice);
+  const threshold = getDynamicThreshold();
 
   if (diff < threshold) {
     log(`📊 Oracle: diff=$${diff.toFixed(2)} < threshold=$${threshold.toFixed(2)} — skip`);
@@ -288,7 +345,6 @@ async function refreshMarkets() {
   } finally { discovering = false; }
 }
 
-// ── REST price polling ────────────────────────────────────────────────────────
 async function pollPrices() {
   const w = marketCache[currentWindowStart()];
   if (!w) return;
@@ -305,10 +361,8 @@ async function pollPrices() {
   }));
 }
 
-// ── Resolution ────────────────────────────────────────────────────────────────
 async function checkResolution() {
   const nowSec = Math.floor(Date.now() / 1000);
-  const cws    = currentWindowStart();
   for (const [tsStr, wst] of Object.entries(windowState)) {
     const ts = Number(tsStr);
     if (wst.resolved) continue;
@@ -348,7 +402,6 @@ async function checkResolution() {
   }
 }
 
-// ── Update floating pnl ───────────────────────────────────────────────────────
 function updateFloating() {
   const w = marketCache[currentWindowStart()];
   if (!w) return;
@@ -358,7 +411,6 @@ function updateFloating() {
   }
 }
 
-// ── Dashboard snapshot ────────────────────────────────────────────────────────
 function buildDashboardSnapshot() {
   const cws    = currentWindowStart();
   const nowSec = Math.floor(Date.now() / 1000);
@@ -366,7 +418,6 @@ function buildDashboardSnapshot() {
   const wst    = windowState[cws] || {};
   const upPrice = w ? getPrice(w.btcUp) : 0;
   const dnPrice = w ? getPrice(w.btcDn) : 0;
-  const openInWindow = state.openTrades.filter(t => t.windowStart === cws);
   return {
     balance:      +state.balance.toFixed(2),
     totalPnl:     +state.totalPnl.toFixed(2),
@@ -385,13 +436,13 @@ function buildDashboardSnapshot() {
       threshold:  +getDynamicThreshold().toFixed(2),
     },
     window: w ? {
-      windowStart:      cws,
-      elapsed:          nowSec - cws,
-      remaining:        Math.max(0, WINDOW_SIZE - (nowSec - cws)),
-      upPrice:          +upPrice.toFixed(3),
-      dnPrice:          +dnPrice.toFixed(3),
-      oracleArbPlaced:  wst.oracleArbPlaced || false,
-      openCount:        openInWindow.length,
+      windowStart:     cws,
+      elapsed:         nowSec - cws,
+      remaining:       Math.max(0, WINDOW_SIZE - (nowSec - cws)),
+      upPrice:         +upPrice.toFixed(3),
+      dnPrice:         +dnPrice.toFixed(3),
+      oracleArbPlaced: wst.oracleArbPlaced || false,
+      openCount:       state.openTrades.filter(t => t.windowStart === cws).length,
     } : null,
   };
 }
@@ -419,9 +470,12 @@ async function tick() {
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
-  log('🚀 BTC Oracle Arb Bot — Chainlink BTC/USD → Polymarket 5m');
-  log(`   $${ORACLE_ARB_AMOUNT} per signal | trigger=${ORACLE_ARB_TRIGGER}s before end | min edge < ${ORACLE_MIN_EDGE} | dynamic threshold`);
-  loadState(); await connectOracle(); await tick();
+  log('🚀 BTC Oracle Arb Bot — raw Chainlink log subscription');
+  log(`   $${ORACLE_ARB_AMOUNT} per signal | trigger=${ORACLE_ARB_TRIGGER}s | edge < ${ORACLE_MIN_EDGE} | dynamic threshold`);
+  loadState();
+  await fetchInitialPrice();
+  connectOracleWs();
+  await tick();
   timer = setInterval(tick, 5000);
   setInterval(async function() {
     await pollPrices();
@@ -435,5 +489,8 @@ async function start(emit, logEmit) {
   }, 2000);
   log(`💰 Balance: $${state.balance.toFixed(2)}`);
 }
-function stop() { clearInterval(timer); if (oracleProvider) oracleProvider.destroy(); }
+function stop() {
+  clearInterval(timer);
+  if (oracleWs) { try { oracleWs.terminate(); } catch(_){} }
+}
 module.exports = { start, stop, buildDashboardSnapshot };
