@@ -97,7 +97,7 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
 <header>
   <div>
     <div class="brand">BTC <em>REVERSION</em> BOT</div>
-    <div class="sub">TOKEN 0.20-0.80 · 1.5× AVG · NO TREND · 30s SIGNAL · 20 SHARES · MULTI-FIRE</div>
+    <div class="sub">TOKEN 0.10-0.90 · 0.5× AVG · NO TREND · 15s SIGNAL · 20 SHARES · MULTI-FIRE</div>
   </div>
   <div class="hstats">
     <div class="hstat"><label>BALANCE</label><div class="val" id="h-bal">$—</div></div>
@@ -125,7 +125,6 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
         <div class="pcell"><label>↑ UP token</label><div class="pval up" id="p-up">—</div></div>
         <div class="pcell"><label>↓ DOWN token</label><div class="pval dn" id="p-dn">—</div></div>
       </div>
-
       <div class="signal-box none" id="sig-box">
         <div class="sig-head">
           <span class="sig-title" id="sig-title">SIGNAL MONITOR</span>
@@ -133,21 +132,20 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
         </div>
         <div class="sig-grid">
           <div class="sg"><label>AVG 30s</label><value id="sig-avg" style="color:var(--amber)">$—</value></div>
-          <div class="sg"><label>NEED (1.5×)</label><value id="sig-req" style="color:var(--purple)">$—</value></div>
+          <div class="sg"><label>NEED (0.5×)</label><value id="sig-req" style="color:var(--purple)">$—</value></div>
           <div class="sg"><label>LAST 30s</label><value id="sig-last">$—</value></div>
           <div class="sg"><label>BTC DIR</label><value id="sig-dir">—</value></div>
           <div class="sg"><label>BUY DIR</label><value id="sig-buy">—</value></div>
         </div>
-        <!-- Filter status badges -->
         <div class="filter-row">
           <div class="fbadge dim" id="f1">F1: TOKEN RANGE</div>
-          <div class="fbadge dim" id="f2">F2: 1.5× AVG</div>
+          <div class="fbadge dim" id="f2">F2: 0.5× AVG</div>
           <div class="fbadge dim" id="f3">F3: NOT TRENDING</div>
         </div>
         <div class="move-bar-wrap">
           <div class="move-bar-label">
             <span>0</span>
-            <span>Last 30s vs avg (🟡) and 1.5× (🟣)</span>
+            <span>Last 30s vs avg (🟡) and 0.5× (🟣)</span>
             <span id="sig-bar-max">—</span>
           </div>
           <div class="move-bar-bg">
@@ -191,16 +189,12 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
 <script>
 var socket = io();
 var logCount = 0;
-// ── Local clock — runs every second independently of server ──────────────────
 var localWindowStart = null;
-var localServerTime  = null;
-var localElapsedOffset = 0;
 
 setInterval(function() {
   if (!localWindowStart) return;
-  var nowMs  = Date.now();
-  var elapsed = Math.floor((nowMs / 1000)) - localWindowStart + localElapsedOffset;
-  var rem    = Math.max(0, 300 - elapsed);
+  var elapsed = Math.floor(Date.now() / 1000) - localWindowStart;
+  var rem = Math.max(0, 300 - elapsed);
   var m = Math.floor(rem / 60), s = rem % 60;
   var te = document.getElementById('timer');
   if (te) {
@@ -213,8 +207,7 @@ setInterval(function() {
     pb.style.width = pct + '%';
     pb.className = 'prog ' + (pct > 80 ? 'warn' : 'ok');
   }
-  set('w-el', elapsed);
-  // countdown to next signal
+  set('w-el', Math.min(elapsed, 300));
   var nxt = document.getElementById('w-next');
   if (nxt && nxt.textContent !== '—') {
     var cur = parseInt(nxt.textContent);
@@ -226,7 +219,7 @@ socket.on('connect',    function(){ document.getElementById('wsdot').classList.r
 socket.on('disconnect', function(){ document.getElementById('wsdot').classList.add('off'); });
 
 socket.on('prices', function(p) {
-  if (p.binancePrice)   set('p-btc', '$' + p.binancePrice.toFixed(2));
+  if (p.binancePrice)    set('p-btc', '$' + p.binancePrice.toFixed(2));
   if (p.chainlinkPrice && p.chainlinkPrice > 0) set('p-chl', '$' + p.chainlinkPrice.toFixed(2));
   if (p.upPrice)  set('p-up', p.upPrice > 0 ? p.upPrice.toFixed(3) : '—');
   if (p.dnPrice)  set('p-dn', p.dnPrice > 0 ? p.dnPrice.toFixed(3) : '—');
@@ -264,10 +257,8 @@ socket.on('log', function(line){ addLog(line); });
 
 function set(id, v){ var e = document.getElementById(id); if(e) e.textContent = v; }
 
-// Sync local clock from server time
 function syncClock(w) {
-  localWindowStart   = w.windowStart;
-  localElapsedOffset = 0;
+  localWindowStart = w.windowStart;
   set('w-ts',     'ws:' + w.windowStart);
   set('w-trades', w.tradesThisWindow || 0);
   if (w.upPrice) set('p-up', w.upPrice > 0 ? w.upPrice.toFixed(3) : '—');
@@ -281,16 +272,17 @@ function renderSignal(s, w) {
   set('sig-last', '$' + s.last30sMove.toFixed(2));
   set('w-next',   s.nextCheckIn);
 
-  var dirEl = document.getElementById('sig-dir');
-  var buyEl = document.getElementById('sig-buy');
+  var dirEl  = document.getElementById('sig-dir');
+  var buyEl  = document.getElementById('sig-buy');
   var lastEl = document.getElementById('sig-last');
 
   if (s.last30sDir) {
-    dirEl.textContent = s.last30sDir === 'UP' ? '↑ UP' : '↓ DOWN';
-    dirEl.style.color = s.last30sDir === 'UP' ? 'var(--green)' : 'var(--red)';
+    dirEl.textContent  = s.last30sDir === 'UP' ? '↑ UP' : '↓ DOWN';
+    dirEl.style.color  = s.last30sDir === 'UP' ? 'var(--green)' : 'var(--red)';
     lastEl.style.color = s.last30sDir === 'UP' ? 'var(--green)' : 'var(--red)';
   } else {
     dirEl.textContent = '—'; dirEl.style.color = 'var(--dim2)';
+    lastEl.style.color = 'var(--text)';
   }
   if (s.reversedDir) {
     buyEl.textContent = s.reversedDir === 'UP' ? '↑ BUY UP' : '↓ BUY DOWN';
@@ -299,28 +291,27 @@ function renderSignal(s, w) {
     buyEl.textContent = '—'; buyEl.style.color = 'var(--dim2)';
   }
 
-  // Filter badges
-  var upPrice = w ? w.upPrice : 0;
-  var dnPrice = w ? w.dnPrice : 0;
+  var upPrice    = w ? w.upPrice : 0;
+  var dnPrice    = w ? w.dnPrice : 0;
   var tokenPrice = s.reversedDir === 'UP' ? upPrice : dnPrice;
-  var f1Pass = tokenPrice >= 0.20 && tokenPrice <= 0.80;
-  var f2Pass = s.last30sMove > s.required && s.avg30sMove > 0;
-  var f3Pass = !s.trending;
+  var f1Pass     = tokenPrice >= 0.10 && tokenPrice <= 0.90;
+  var f2Pass     = s.last30sMove > s.required && s.avg30sMove > 0;
+  var f3Pass     = !s.trending;
 
   var f1 = document.getElementById('f1');
   var f2 = document.getElementById('f2');
   var f3 = document.getElementById('f3');
   f1.textContent = 'F1: TOKEN ' + (tokenPrice > 0 ? tokenPrice.toFixed(3) : '?') + (f1Pass ? ' ✅' : ' ❌');
-  f1.className = 'fbadge ' + (f1Pass ? 'pass' : 'fail');
-  f2.textContent = 'F2: 1.5× ($' + s.required.toFixed(1) + ')' + (f2Pass ? ' ✅' : ' ❌');
-  f2.className = 'fbadge ' + (f2Pass ? 'pass' : 'fail');
+  f1.className   = 'fbadge ' + (f1Pass ? 'pass' : 'fail');
+  f2.textContent = 'F2: 0.5× ($' + s.required.toFixed(1) + ')' + (f2Pass ? ' ✅' : ' ❌');
+  f2.className   = 'fbadge ' + (f2Pass ? 'pass' : 'fail');
   f3.textContent = 'F3: ' + (s.trending ? '⚠️ TRENDING' : 'NOT TRENDING ✅');
-  f3.className = 'fbadge ' + (!s.trending ? 'pass' : 'warn');
+  f3.className   = 'fbadge ' + (!s.trending ? 'pass' : 'warn');
 
-  // Box state
   var box    = document.getElementById('sig-box');
   var title  = document.getElementById('sig-title');
   var status = document.getElementById('sig-status');
+
   if (s.isSignal && s.reversedDir) {
     box.className = 'signal-box ' + s.reversedDir.toLowerCase();
     title.textContent = '🔄 REVERSION: BTC ' + (s.last30sDir||'') + ' $' + s.last30sMove.toFixed(2) + ' → BUYING ' + s.reversedDir;
@@ -337,7 +328,7 @@ function renderSignal(s, w) {
     box.className = 'signal-box none';
     title.textContent = 'SIGNAL MONITOR';
     title.style.color = 'var(--text)';
-    status.textContent = '$' + s.last30sMove.toFixed(2) + ' vs need $' + s.required.toFixed(2) + ' — ' + (f2Pass ? 'move ok' : 'below threshold');
+    status.textContent = '$' + s.last30sMove.toFixed(2) + ' vs need $' + s.required.toFixed(2) + ' — ' + (f2Pass ? 'above threshold' : 'below threshold');
     status.style.color = f2Pass ? 'var(--amber)' : 'var(--dim2)';
   } else {
     box.className = 'signal-box none';
@@ -347,12 +338,11 @@ function renderSignal(s, w) {
     status.style.color = 'var(--dim2)';
   }
 
-  // Move bar
   if (s.avg30sMove > 0) {
-    var max     = Math.max(s.required * 1.5, s.last30sMove * 1.1);
+    var max     = Math.max(s.required * 2, s.last30sMove * 1.1, 1);
     var avgPct  = Math.min(99, (s.avg30sMove / max) * 100);
-    var reqPct  = Math.min(99, (s.required  / max) * 100);
-    var lastPct = Math.min(100, (s.last30sMove / max) * 100);
+    var reqPct  = Math.min(99, (s.required   / max) * 100);
+    var lastPct = Math.min(100,(s.last30sMove / max) * 100);
     document.getElementById('sig-bar-avg').style.left   = avgPct + '%';
     document.getElementById('sig-bar-req').style.left   = reqPct + '%';
     document.getElementById('sig-bar-fill').style.width = lastPct + '%';
