@@ -1,14 +1,22 @@
 'use strict';
 
-const fetch = require('node-fetch');
+const fetch   = require('node-fetch');
 const WebSocket = require('ws');
-const fs = require('fs');
-const path = require('path');
+const ethers  = require('ethers');
+const fs      = require('fs');
+const path    = require('path');
 
 const GAMMA      = 'https://gamma-api.polymarket.com';
 const CLOB_REST  = 'https://clob.polymarket.com';
 const CLOB_WS    = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const TRADES_FILE = path.join(__dirname, 'trades.json');
+
+const QUICKNODE_WSS = 'wss://magical-thrumming-darkness.matic.quiknode.pro/1200504c2577a6812ec891b7f3ea2c5e4ee2bc55/';
+const CHAINLINK_BTC_USD = '0xc907E116054Ad103354f2D350FD2514433D57F6f';
+const CHAINLINK_ABI = [
+  'event AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)',
+  'function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
+];
 
 const WINDOW_SIZE        = 300;
 const ENTRY_PRICE        = 0.32;
@@ -20,12 +28,23 @@ const RECOVERY_TP        = 0.99;
 const RECOVERY_SL        = 0.45;
 const FIRST_TP           = 0.99;
 const RECOVERY_TARGET    = 15;
+const ORACLE_ARB_AMOUNT  = 50;
+const ORACLE_ARB_TRIGGER = 90;
+const ORACLE_MIN_EDGE    = 0.30;
 const STARTING_BALANCE   = 1000;
 
 let state = { balance: STARTING_BALANCE, openTrades: [], closedTrades: [], totalPnl: 0 };
 const priceBook   = {};
 const marketCache = {};
 const windowState = {};
+
+let chainlinkBtcPrice  = 0;
+let chainlinkUpdatedAt = 0;
+let windowOpenBtcPrice = {};
+let chainlinkHistory   = [];
+let oracleProvider     = null;
+let oracleFeed         = null;
+
 let emitFn = () => {};
 let logFn  = () => {};
 
@@ -61,6 +80,128 @@ function getPrice(tid) {
   return b.bid || b.ask || 0;
 }
 
+// ── Chainlink Oracle ──────────────────────────────────────────────────────────
+async function connectOracle() {
+  try {
+    log('🔗 Connecting to Chainlink BTC/USD via QuickNode…');
+    oracleProvider = new ethers.providers.WebSocketProvider(QUICKNODE_WSS);
+    oracleFeed     = new ethers.Contract(CHAINLINK_BTC_USD, CHAINLINK_ABI, oracleProvider);
+    const data = await oracleFeed.latestRoundData();
+    chainlinkBtcPrice  = data.answer.toNumber() / 1e8;
+    chainlinkUpdatedAt = data.updatedAt.toNumber();
+    pushChainlinkHistory();
+    log(`✅ Chainlink connected — BTC/USD = $${chainlinkBtcPrice.toFixed(2)}`);
+    recordWindowOpenPrice();
+    oracleFeed.on('AnswerUpdated', (current, roundId, updatedAt) => {
+      const newPrice = current.toNumber() / 1e8;
+      const oldPrice = chainlinkBtcPrice;
+      chainlinkBtcPrice  = newPrice;
+      chainlinkUpdatedAt = updatedAt.toNumber();
+      const change = newPrice - oldPrice;
+      pushChainlinkHistory();
+      const threshold = getDynamicThreshold();
+      log(`⚡ Chainlink BTC/USD = $${newPrice.toFixed(2)} (${change >= 0 ? '+' : ''}$${change.toFixed(2)}) | dynamic threshold=$${threshold.toFixed(2)}`);
+      checkOracleArb();
+    });
+    oracleProvider._websocket.on('close', () => {
+      log('⚡ QuickNode WS closed — reconnecting in 5s…');
+      setTimeout(connectOracle, 5000);
+    });
+    oracleProvider._websocket.on('error', (e) => {
+      log(`⚠️  QuickNode WS error: ${e.message}`);
+    });
+  } catch (e) {
+    log(`⚠️  Oracle connect error: ${e.message} — retry in 10s`);
+    setTimeout(connectOracle, 10000);
+  }
+}
+
+function recordWindowOpenPrice() {
+  const cws = currentWindowStart();
+  if (!windowOpenBtcPrice[cws] && chainlinkBtcPrice > 0) {
+    windowOpenBtcPrice[cws] = chainlinkBtcPrice;
+    log(`📌 Window ${cws} open BTC price: $${chainlinkBtcPrice.toFixed(2)}`);
+  }
+}
+
+function pushChainlinkHistory() {
+  if (chainlinkBtcPrice <= 0) return;
+  const nowSec = Math.floor(Date.now() / 1000);
+  chainlinkHistory.push({ ts: nowSec, price: chainlinkBtcPrice });
+  const cutoff = nowSec - 1800;
+  chainlinkHistory = chainlinkHistory.filter(h => h.ts >= cutoff);
+}
+
+function getDynamicThreshold() {
+  const MIN_THRESHOLD = 5;
+  const TRIGGER_PCT   = 0.50;
+  if (chainlinkHistory.length < 2) return MIN_THRESHOLD;
+  const moves = [];
+  const nowSec = Math.floor(Date.now() / 1000);
+  for (let i = 0; i < 6; i++) {
+    const wEnd   = nowSec - (i * WINDOW_SIZE);
+    const wStart = wEnd - WINDOW_SIZE;
+    const inWindow = chainlinkHistory.filter(h => h.ts >= wStart && h.ts <= wEnd);
+    if (inWindow.length < 2) continue;
+    const prices = inWindow.map(h => h.price);
+    const move = Math.abs(Math.max(...prices) - Math.min(...prices));
+    if (move > 0) moves.push(move);
+  }
+  if (moves.length === 0) return MIN_THRESHOLD;
+  const avgMove = moves.reduce((s, m) => s + m, 0) / moves.length;
+  return +Math.max(MIN_THRESHOLD, avgMove * TRIGGER_PCT).toFixed(2);
+}
+
+// ── Oracle Arb ────────────────────────────────────────────────────────────────
+function checkOracleArb() {
+  const nowSec    = Math.floor(Date.now() / 1000);
+  const cws       = currentWindowStart();
+  const elapsed   = nowSec - cws;
+  const remaining = WINDOW_SIZE - elapsed;
+  if (remaining > ORACLE_ARB_TRIGGER || remaining < 5) return;
+  const w = marketCache[cws];
+  if (!w) return;
+  const openPrice = windowOpenBtcPrice[cws];
+  if (!openPrice || chainlinkBtcPrice === 0) return;
+  const wst = windowState[cws] || {};
+  if (wst.oracleArbPlaced) return;
+  const btcWentUp   = chainlinkBtcPrice > openPrice;
+  const diff        = Math.abs(chainlinkBtcPrice - openPrice);
+  const threshold   = getDynamicThreshold();
+  if (diff < threshold) {
+    log(`📊 Oracle: diff=$${diff.toFixed(2)} threshold=$${threshold.toFixed(2)} — below threshold, skipping`);
+    return;
+  }
+  const winningToken = btcWentUp ? w.btcUp : w.btcDn;
+  const winningPrice = getPrice(winningToken);
+  const winningLabel = btcWentUp ? 'UP' : 'DOWN';
+  log(`🎯 ORACLE SIGNAL: BTC $${openPrice.toFixed(2)} → $${chainlinkBtcPrice.toFixed(2)} = ${btcWentUp ? '↑ UP' : '↓ DOWN'} wins | token=${winningPrice.toFixed(3)} | ${remaining}s left`);
+  if (winningPrice <= 0 || winningPrice > ORACLE_MIN_EDGE) {
+    log(`⚠️  Oracle: token already at ${winningPrice.toFixed(3)} > ${ORACLE_MIN_EDGE} — too late`);
+    return;
+  }
+  if (state.balance < ORACLE_ARB_AMOUNT) { log(`💸 Oracle: Low balance`); return; }
+  const shares = ORACLE_ARB_AMOUNT / winningPrice;
+  const id     = tradeId();
+  state.balance -= ORACLE_ARB_AMOUNT;
+  const trade = {
+    id, windowStart: cws, side: winningLabel, type: 'ORACLE_ARB',
+    entryPrice: winningPrice, tp: 0.99, sl: 0,
+    shares: +shares.toFixed(4), cost: ORACLE_ARB_AMOUNT,
+    openedAt: new Date().toISOString(), floatingPnl: 0,
+    oracleBtcOpen: openPrice, oracleBtcClose: chainlinkBtcPrice,
+  };
+  state.openTrades.push(trade);
+  if (!windowState[cws]) windowState[cws] = {};
+  windowState[cws].oracleArbPlaced = true;
+  windowState[cws].oracleArbId    = id;
+  saveState();
+  log(`🚀 ORACLE ARB ${winningLabel} [${id}] BTC=$${chainlinkBtcPrice.toFixed(2)} token=${winningPrice.toFixed(3)} shares=${shares.toFixed(2)} cost=$${ORACLE_ARB_AMOUNT} ${remaining}s left bal=$${state.balance.toFixed(2)}`);
+  emitFn('trade_entered', trade);
+  emitFn('snapshot', buildDashboardSnapshot());
+}
+
+// ── Token extraction ──────────────────────────────────────────────────────────
 function extractTokenIds(mkt) {
   if (!mkt) return null;
   let ids = mkt.clobTokenIds ?? mkt.clob_token_ids;
@@ -147,6 +288,7 @@ async function refreshMarkets() {
       if (res) {
         marketCache[res.ts] = { windowStart: res.ts, btcUp: res.tokens.upToken, btcDn: res.tokens.dnToken, slug: res.slug };
         log(`✅ Current found ts=${res.ts} | ${res.slug}`);
+        recordWindowOpenPrice();
       }
     }
     if (!marketCache[nextWs] && !windowState[nextWs]) {
@@ -169,18 +311,10 @@ async function placePreMarketOrders(ts) {
   const dnPrice = getPrice(w.btcDn);
   if (!upPrice || !dnPrice) { log(`⚠️  No price for next window ${ts} — will retry`); return; }
   windowState[ts] = {
-    phase: 'PENDING',
-    filledSide: null,
-    firstTrade: null,
-    // recoveries is an array — multiple recoveries allowed
-    recoveries: [],
-    upLimitPrice: ENTRY_PRICE,
-    dnLimitPrice: ENTRY_PRICE,
-    upCancelled: false,
-    dnCancelled: false,
-    resolved: false,
-    // track if opposite side has gone below recovery trigger after last recovery closed
-    recoveryArmed: false,
+    phase: 'PENDING', filledSide: null, firstTrade: null,
+    recoveries: [], upLimitPrice: ENTRY_PRICE, dnLimitPrice: ENTRY_PRICE,
+    upCancelled: false, dnCancelled: false, resolved: false,
+    oracleArbPlaced: false, oracleArbId: null,
   };
   log(`📋 PRE-MARKET ts=${ts} | BUY UP @ ${ENTRY_PRICE} AND BUY DOWN @ ${ENTRY_PRICE}`);
   emitFn('snapshot', buildDashboardSnapshot());
@@ -199,21 +333,25 @@ function checkWindow(w) {
   const dnPrice = getPrice(w.btcDn);
   if (!upPrice || !dnPrice) return;
 
-  // Update floating pnl for first trade
   if (wst.firstTrade && !wst.firstTrade.closed) {
     const fp = wst.filledSide === 'UP' ? upPrice : dnPrice;
     wst.firstTrade.floatingPnl = +((fp - wst.firstTrade.entryPrice) * wst.firstTrade.shares).toFixed(4);
     const ot = state.openTrades.find(t => t.id === wst.firstTrade.id);
     if (ot) ot.floatingPnl = wst.firstTrade.floatingPnl;
   }
-
-  // Update floating pnl for active recovery
   const ar = activeRecovery(wst);
   if (ar) {
     const rp = ar.side === 'UP' ? upPrice : dnPrice;
     ar.floatingPnl = +((rp - ar.entryPrice) * ar.shares).toFixed(4);
     const ot = state.openTrades.find(t => t.id === ar.id);
     if (ot) ot.floatingPnl = ar.floatingPnl;
+  }
+  if (wst.oracleArbId) {
+    const ot = state.openTrades.find(t => t.id === wst.oracleArbId);
+    if (ot) {
+      const op = ot.side === 'UP' ? upPrice : dnPrice;
+      ot.floatingPnl = +((op - ot.entryPrice) * ot.shares).toFixed(4);
+    }
   }
 
   if (wst.phase === 'PENDING')       checkLimitFills(w, wst, upPrice, dnPrice);
@@ -231,8 +369,7 @@ function fillFirst(w, wst, side, price) {
   if (state.balance < ENTRY_AMOUNT) { log(`💸 Low balance`); return; }
   const shares = ENTRY_AMOUNT / price;
   const id = tradeId();
-  wst.filledSide = side;
-  wst.phase      = 'FILLED';
+  wst.filledSide = side; wst.phase = 'FILLED';
   if (side === 'UP') { wst.dnCancelled = true; log(`❌ Cancelled DN limit`); }
   else               { wst.upCancelled = true; log(`❌ Cancelled UP limit`); }
   wst.firstTrade = { id, side, entryPrice: price, shares: +shares.toFixed(4), cost: ENTRY_AMOUNT, sl: FIRST_SL, tp: FIRST_TP, closed: false, floatingPnl: 0 };
@@ -245,32 +382,25 @@ function fillFirst(w, wst, side, price) {
 }
 
 function checkFirstPosition(w, wst, upPrice, dnPrice) {
-  const ft       = wst.firstTrade;
+  const ft = wst.firstTrade;
   const curPrice = ft.side === 'UP' ? upPrice : dnPrice;
   const oppPrice = ft.side === 'UP' ? dnPrice : upPrice;
   if (curPrice >= ft.tp) { closeFirstPosition(w, wst, ft.tp, 'TP'); return; }
   if (curPrice <= ft.sl) { closeFirstPosition(w, wst, ft.sl, 'SL'); }
-  // Check recovery trigger — opposite side reaches 0.65
-  if (!activeRecovery(wst) && oppPrice >= RECOVERY_TRIGGER) {
-    placeRecovery(w, wst, oppPrice);
-  }
+  if (!activeRecovery(wst) && oppPrice >= RECOVERY_TRIGGER) placeRecovery(w, wst, oppPrice);
 }
 
 function checkRecoveryTrigger(w, wst, upPrice, dnPrice) {
   const oppPrice = wst.filledSide === 'UP' ? dnPrice : upPrice;
-  if (!activeRecovery(wst) && oppPrice >= RECOVERY_TRIGGER) {
-    placeRecovery(w, wst, oppPrice);
-  }
+  if (!activeRecovery(wst) && oppPrice >= RECOVERY_TRIGGER) placeRecovery(w, wst, oppPrice);
 }
 
 function closeFirstPosition(w, wst, exitPrice, reason) {
-  const ft      = wst.firstTrade;
+  const ft = wst.firstTrade;
   if (ft.closed) return;
   const proceeds = exitPrice * ft.shares;
-  const pnl     = proceeds - ft.cost;
-  state.balance  += proceeds;
-  state.totalPnl += pnl;
-  ft.closed = true;
+  const pnl = proceeds - ft.cost;
+  state.balance += proceeds; state.totalPnl += pnl; ft.closed = true;
   state.openTrades = state.openTrades.filter(t => t.id !== ft.id);
   state.closedTrades.push({ id: ft.id, windowStart: w.windowStart, side: ft.side, type: 'FIRST', entryPrice: ft.entryPrice, exitPrice, shares: ft.shares, cost: ft.cost, proceeds: +proceeds.toFixed(2), realizedPnl: +pnl.toFixed(4), closedAt: new Date().toISOString(), exitReason: reason });
   saveState();
@@ -279,24 +409,22 @@ function closeFirstPosition(w, wst, exitPrice, reason) {
 }
 
 function placeRecovery(w, wst, oppPrice) {
-  // Use fixed RECOVERY_PRICE (0.65) not live price for consistent math
-  const buyPrice       = Math.min(oppPrice, RECOVERY_PRICE);
+  const buyPrice = Math.min(oppPrice, RECOVERY_PRICE);
   const profitPerShare = RECOVERY_TP - buyPrice;
-  if (profitPerShare <= 0) { log(`⚠️  Recovery profit <= 0`); return; }
-  const shares       = RECOVERY_TARGET / profitPerShare;
+  if (profitPerShare <= 0) return;
+  const shares = RECOVERY_TARGET / profitPerShare;
   const recoveryCost = +(shares * buyPrice).toFixed(2);
   if (state.balance < recoveryCost) { log(`💸 Low balance for recovery — need $${recoveryCost.toFixed(2)}`); return; }
   const recoverySide = wst.filledSide === 'UP' ? 'DOWN' : 'UP';
-  const id           = tradeId();
-  const recNum       = wst.recoveries.length + 1;
+  const id = tradeId();
+  const recNum = wst.recoveries.length + 1;
   const rec = { id, side: recoverySide, entryPrice: buyPrice, shares: +shares.toFixed(4), cost: recoveryCost, sl: RECOVERY_SL, tp: RECOVERY_TP, closed: false, floatingPnl: 0, num: recNum };
-  wst.recoveries.push(rec);
-  wst.phase = 'RECOVERY';
+  wst.recoveries.push(rec); wst.phase = 'RECOVERY';
   state.balance -= recoveryCost;
   const trade = { id, windowStart: w.windowStart, side: recoverySide, type: `RECOVERY#${recNum}`, entryPrice: buyPrice, sl: RECOVERY_SL, tp: RECOVERY_TP, shares: +shares.toFixed(4), cost: recoveryCost, openedAt: new Date().toISOString(), floatingPnl: 0 };
   state.openTrades.push(trade);
   saveState();
-  log(`🔄 RECOVERY#${recNum} ${recoverySide} [${id}] @ ${buyPrice.toFixed(3)} shares=${shares.toFixed(2)} cost=$${recoveryCost.toFixed(2)} target=$${RECOVERY_TARGET} sl=${RECOVERY_SL} tp=${RECOVERY_TP} bal=$${state.balance.toFixed(2)}`);
+  log(`🔄 RECOVERY#${recNum} ${recoverySide} [${id}] @ ${buyPrice.toFixed(3)} shares=${shares.toFixed(2)} cost=$${recoveryCost.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
   emitFn('trade_entered', trade);
 }
 
@@ -304,39 +432,19 @@ function checkRecoveryPosition(w, wst, upPrice, dnPrice) {
   const ar = activeRecovery(wst);
   if (!ar) { wst.phase = wst.firstTrade?.closed ? 'RECOVERY_WAIT' : 'FILLED'; return; }
   const curPrice = ar.side === 'UP' ? upPrice : dnPrice;
-  const oppPrice = ar.side === 'UP' ? dnPrice : upPrice;
-
-  if (curPrice >= ar.tp) {
-    closeRecovery(w, wst, ar, ar.tp, 'TP');
-    // After TP — if first trade still open, go back to FILLED phase to watch it
-    // Also re-arm for another recovery if opposite drops back to 0.65
-    wst.phase = wst.firstTrade && !wst.firstTrade.closed ? 'FILLED' : 'RECOVERY_WAIT';
-    return;
-  }
-  if (curPrice <= ar.sl) {
-    closeRecovery(w, wst, ar, ar.sl, 'SL');
-    wst.phase = wst.firstTrade && !wst.firstTrade.closed ? 'FILLED' : 'RECOVERY_WAIT';
-    return;
-  }
-
-  // Check if another recovery needed while this one is open — NO, only one active at a time
-  // But check first position TP/SL while recovery is running
+  if (curPrice >= ar.tp) { closeRecovery(w, wst, ar, ar.tp, 'TP'); wst.phase = wst.firstTrade && !wst.firstTrade.closed ? 'FILLED' : 'RECOVERY_WAIT'; return; }
+  if (curPrice <= ar.sl) { closeRecovery(w, wst, ar, ar.sl, 'SL'); wst.phase = wst.firstTrade && !wst.firstTrade.closed ? 'FILLED' : 'RECOVERY_WAIT'; return; }
   if (wst.firstTrade && !wst.firstTrade.closed) {
     const fp = wst.filledSide === 'UP' ? upPrice : dnPrice;
     if (fp >= wst.firstTrade.tp) closeFirstPosition(w, wst, wst.firstTrade.tp, 'TP');
     else if (fp <= wst.firstTrade.sl) closeFirstPosition(w, wst, wst.firstTrade.sl, 'SL');
   }
-
-  // Check if opposite drops back to trigger again for NEXT recovery after this closes
-  // (handled after close above)
 }
 
 function closeRecovery(w, wst, rec, exitPrice, reason) {
   const proceeds = exitPrice * rec.shares;
-  const pnl     = proceeds - rec.cost;
-  state.balance  += proceeds;
-  state.totalPnl += pnl;
-  rec.closed = true;
+  const pnl = proceeds - rec.cost;
+  state.balance += proceeds; state.totalPnl += pnl; rec.closed = true;
   state.openTrades = state.openTrades.filter(t => t.id !== rec.id);
   state.closedTrades.push({ id: rec.id, windowStart: w.windowStart, side: rec.side, type: `RECOVERY#${rec.num}`, entryPrice: rec.entryPrice, exitPrice, shares: rec.shares, cost: rec.cost, proceeds: +proceeds.toFixed(2), realizedPnl: +pnl.toFixed(4), closedAt: new Date().toISOString(), exitReason: reason });
   saveState();
@@ -362,19 +470,16 @@ async function checkResolution() {
       const rp  = t.side === 'UP' ? upPrice : dnPrice;
       const pro = rp * t.shares;
       const pnl = pro - t.cost;
-      windowPnl      += pnl;
-      state.balance  += pro;
-      state.totalPnl += pnl;
+      windowPnl += pnl; state.balance += pro; state.totalPnl += pnl;
       state.closedTrades.push({ ...t, exitPrice: rp, proceeds: +pro.toFixed(2), realizedPnl: +pnl.toFixed(4), closedAt: new Date().toISOString(), exitReason: 'RESOLVED' });
       log(`${pnl >= 0 ? '🟢' : '🔴'} RESOLVED ${t.type} ${t.side} [${t.id}] resolved=${rp.toFixed(3)} pnl=$${pnl.toFixed(2)}`);
     }
     state.openTrades = state.openTrades.filter(t => t.windowStart !== ts);
     wst.resolved = true;
     saveState();
-    const totalRec = wst.recoveries.length;
-    const recTP = wst.recoveries.filter(r => r.closed).length;
-    log(`📊 SUMMARY ts=${ts} recoveries=${totalRec} tp=${recTP} windowPnl=$${windowPnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
+    log(`📊 SUMMARY ts=${ts} windowPnl=$${windowPnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
     delete marketCache[ts];
+    delete windowOpenBtcPrice[ts];
   }
 }
 
@@ -405,9 +510,9 @@ let ws = null, wsReady = false;
 const pendingSubs = new Set();
 function connectWS() {
   ws = new WebSocket(CLOB_WS);
-  ws.on('open', () => { wsReady = true; log('✅ WebSocket connected'); for (const t of pendingSubs) _sub(t); pendingSubs.clear(); });
-  ws.on('close', () => { wsReady = false; log('⚡ WS closed — retry 5s'); setTimeout(connectWS, 5000); });
-  ws.on('error', e => log(`⚠️  WS: ${e.message}`));
+  ws.on('open', () => { wsReady = true; log('✅ Polymarket WS connected'); for (const t of pendingSubs) _sub(t); pendingSubs.clear(); });
+  ws.on('close', () => { wsReady = false; log('⚡ Polymarket WS closed — retry 5s'); setTimeout(connectWS, 5000); });
+  ws.on('error', e => log(`⚠️  Polymarket WS: ${e.message}`));
 }
 function _sub(tid) { ws.send(JSON.stringify({ assets_ids: [tid], type: 'market' })); }
 
@@ -425,6 +530,14 @@ function buildDashboardSnapshot() {
     openTrades:   state.openTrades,
     closedTrades: state.closedTrades.slice(-30),
     updatedAt:    new Date().toISOString(),
+    oracle: {
+      btcPrice:   +chainlinkBtcPrice.toFixed(2),
+      updatedAt:  chainlinkUpdatedAt,
+      windowOpen: windowOpenBtcPrice[cws] ? +windowOpenBtcPrice[cws].toFixed(2) : null,
+      direction:  chainlinkBtcPrice > 0 && windowOpenBtcPrice[cws] ? (chainlinkBtcPrice > windowOpenBtcPrice[cws] ? 'UP' : 'DOWN') : null,
+      diff:       windowOpenBtcPrice[cws] ? +(chainlinkBtcPrice - windowOpenBtcPrice[cws]).toFixed(2) : null,
+      threshold:  +getDynamicThreshold().toFixed(2),
+    },
     current: curW ? {
       windowStart: cws,
       elapsed:   nowSec - cws,
@@ -432,20 +545,18 @@ function buildDashboardSnapshot() {
       upPrice:   +getPrice(curW.btcUp).toFixed(3),
       dnPrice:   +getPrice(curW.btcDn).toFixed(3),
       wst: curWst ? {
-        phase:       curWst.phase,
-        filledSide:  curWst.filledSide,
-        upCancelled: curWst.upCancelled,
-        dnCancelled: curWst.dnCancelled,
-        firstTrade:  curWst.firstTrade,
-        recoveries:  curWst.recoveries,
+        phase: curWst.phase, filledSide: curWst.filledSide,
+        upCancelled: curWst.upCancelled, dnCancelled: curWst.dnCancelled,
+        firstTrade: curWst.firstTrade, recoveries: curWst.recoveries,
         activeRecovery: activeRecovery(curWst),
+        oracleArbPlaced: curWst.oracleArbPlaced,
       } : null,
     } : null,
     next: nextW ? {
       windowStart: nextWs,
-      upPrice:    +getPrice(nextW.btcUp).toFixed(3),
-      dnPrice:    +getPrice(nextW.btcDn).toFixed(3),
-      phase:      nextWst?.phase ?? null,
+      upPrice: +getPrice(nextW.btcUp).toFixed(3),
+      dnPrice: +getPrice(nextW.btcDn).toFixed(3),
+      phase: nextWst?.phase ?? null,
     } : null,
   };
 }
@@ -462,10 +573,12 @@ async function tick() {
     prune();
     await refreshMarkets();
     await pollPrices();
+    recordWindowOpenPrice();
+    pushChainlinkHistory();
     const nextWs = currentWindowStart() + WINDOW_SIZE;
     if (marketCache[nextWs] && !windowState[nextWs]) await placePreMarketOrders(nextWs);
     const w = marketCache[currentWindowStart()];
-    if (w) checkWindow(w);
+    if (w) { checkWindow(w); checkOracleArb(); }
     await checkResolution();
     emitFn('snapshot', buildDashboardSnapshot());
   } catch (e) { log(`⚠️  tick: ${e.message}`); }
@@ -473,8 +586,10 @@ async function tick() {
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
-  log('🚀 BTC 5m Sniper — limit@0.32 SL=0.05 Recovery@0.65 TP=0.99 unlimited recoveries');
-  loadState(); connectWS(); await tick();
+  log('🚀 BTC 5m Sniper + Oracle Arb Bot');
+  log(`   Entry limit@${ENTRY_PRICE} | SL=${FIRST_SL} | Recovery@${RECOVERY_PRICE} | TP=${FIRST_TP}`);
+  log(`   Oracle arb: $${ORACLE_ARB_AMOUNT} per signal | trigger=${ORACLE_ARB_TRIGGER}s before end | dynamic threshold`);
+  loadState(); connectWS(); await connectOracle(); await tick();
   timer = setInterval(tick, 5000);
   setInterval(async function() {
     await pollPrices();
@@ -486,9 +601,10 @@ async function start(emit, logEmit) {
       dnPrice:     curW  ? +getPrice(curW.btcDn).toFixed(3)  : 0,
       nextUpPrice: nextW ? +getPrice(nextW.btcUp).toFixed(3) : 0,
       nextDnPrice: nextW ? +getPrice(nextW.btcDn).toFixed(3) : 0,
+      btcPrice:    +chainlinkBtcPrice.toFixed(2),
     });
   }, 2000);
   log(`💰 Balance: $${state.balance.toFixed(2)}`);
 }
-function stop() { clearInterval(timer); ws?.terminate(); }
+function stop() { clearInterval(timer); ws?.terminate(); if (oracleProvider) oracleProvider.destroy(); }
 module.exports = { start, stop, buildDashboardSnapshot };
