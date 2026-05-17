@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>BTC MOMENTUM BOT</title>
+<title>BTC MEAN REVERSION BOT</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Bebas+Neue&display=swap" rel="stylesheet"/>
 <script src="/socket.io/socket.io.js"></script>
 <style>
@@ -28,7 +28,6 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
 .ph h3{font-size:9px;font-weight:700;letter-spacing:2px;color:var(--dim2);text-transform:uppercase;}
 .ph .badge{font-size:10px;color:var(--cyan);font-weight:700;}
 .wb{padding:14px;}
-/* Timer */
 .timer-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
 .big-timer{font-family:'Bebas Neue';font-size:52px;letter-spacing:2px;line-height:1;}
 .big-timer.g{color:var(--green);}
@@ -39,7 +38,6 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
 .prog{height:100%;border-radius:2px;}
 .prog.ok{background:linear-gradient(90deg,var(--green),var(--cyan));}
 .prog.warn{background:linear-gradient(90deg,var(--amber),var(--red));}
-/* Price row */
 .price-row{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:14px;}
 .pcell{background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:4px;padding:8px 10px;}
 .pcell label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:4px;}
@@ -48,31 +46,26 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
 .pcell .pval.up{color:var(--green);}
 .pcell .pval.dn{color:var(--red);}
 .pcell .pval.chl{color:var(--cyan);}
-/* Signal box */
 .signal-box{border-radius:5px;padding:12px;margin-bottom:14px;border:1px solid var(--border);}
 .signal-box.none{background:rgba(255,255,255,0.02);border-color:var(--border);}
 .signal-box.up{background:rgba(0,230,118,0.08);border-color:var(--green);}
 .signal-box.down{background:rgba(255,61,90,0.08);border-color:var(--red);}
-.signal-box.fired{background:rgba(179,136,255,0.10);border-color:var(--purple);}
-.sig-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+.sig-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
 .sig-title{font-size:11px;font-weight:700;letter-spacing:1px;}
-.sig-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;}
+.sig-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:10px;}
 .sg label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:2px;}
-.sg value{display:block;font-size:14px;font-weight:700;}
-/* Move bar */
-.move-bar-wrap{margin-top:10px;}
+.sg value{display:block;font-size:13px;font-weight:700;}
+.move-bar-wrap{margin-top:4px;}
 .move-bar-label{display:flex;justify-content:space-between;font-size:9px;color:var(--dim2);margin-bottom:4px;}
 .move-bar-bg{height:8px;background:var(--border);border-radius:4px;overflow:hidden;position:relative;}
 .move-bar-avg{position:absolute;top:0;bottom:0;width:2px;background:var(--amber);z-index:2;}
 .move-bar-fill{height:100%;border-radius:4px;transition:width .3s;}
 .move-bar-fill.up{background:var(--green);}
 .move-bar-fill.down{background:var(--red);}
-/* Stats */
 .sbar{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--border);}
 .sbi{background:var(--panel2);padding:8px;text-align:center;}
 .sbi label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:3px;}
 .sbi value{display:block;font-size:14px;font-weight:700;}
-/* Table */
 .tt{width:100%;border-collapse:collapse;}
 .tt th{padding:5px 8px;font-size:8px;color:var(--dim2);letter-spacing:1px;border-bottom:1px solid var(--border);text-align:left;}
 .tt td{padding:5px 8px;border-bottom:1px solid rgba(28,42,58,0.4);font-size:10px;}
@@ -95,8 +88,8 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
 <body>
 <header>
   <div>
-    <div class="brand">BTC <em>MOMENTUM</em> BOT</div>
-    <div class="sub">BINANCE LIVE · 30s SIGNAL · 20 SHARES · MULTI-FIRE · RESOLVE AT WINDOW END</div>
+    <div class="brand">BTC <em>REVERSION</em> BOT</div>
+    <div class="sub">BINANCE LIVE · 30s SIGNAL · MEAN REVERSION · 20 SHARES · MULTI-FIRE · RESOLVE AT WINDOW END</div>
   </div>
   <div class="hstats">
     <div class="hstat"><label>BALANCE</label><div class="val" id="h-bal">$—</div></div>
@@ -107,7 +100,6 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
 </header>
 <main>
 
-  <!-- Window -->
   <div class="panel">
     <div class="ph"><h3>Live Window</h3><div class="badge" id="w-ts">—</div></div>
     <div class="wb">
@@ -115,32 +107,16 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
         <div class="big-timer d" id="timer">—:——</div>
         <div style="text-align:right;font-size:10px;color:var(--dim2)">
           Elapsed: <span id="w-el">—</span>s &nbsp;|&nbsp; Trades: <span id="w-trades">0</span><br>
-          Next check: <span id="w-next">—</span>s &nbsp;|&nbsp; <span id="w-upd">—</span>
+          Next signal: <span id="w-next">—</span>s &nbsp;|&nbsp; <span id="w-upd">—</span>
         </div>
       </div>
       <div class="prog-wrap"><div class="prog ok" id="prog" style="width:0%"></div></div>
-
-      <!-- Prices -->
       <div class="price-row">
-        <div class="pcell">
-          <label>🟡 BTC/USD (Binance)</label>
-          <div class="pval btc" id="p-btc">$—</div>
-        </div>
-        <div class="pcell">
-          <label>⛓️ Chainlink</label>
-          <div class="pval chl" id="p-chl">$—</div>
-        </div>
-        <div class="pcell">
-          <label>↑ UP token</label>
-          <div class="pval up" id="p-up">—</div>
-        </div>
-        <div class="pcell">
-          <label>↓ DOWN token</label>
-          <div class="pval dn" id="p-dn">—</div>
-        </div>
+        <div class="pcell"><label>🟡 BTC/USD Binance</label><div class="pval btc" id="p-btc">$—</div></div>
+        <div class="pcell"><label>⛓️ Chainlink</label><div class="pval chl" id="p-chl">$—</div></div>
+        <div class="pcell"><label>↑ UP token</label><div class="pval up" id="p-up">—</div></div>
+        <div class="pcell"><label>↓ DOWN token</label><div class="pval dn" id="p-dn">—</div></div>
       </div>
-
-      <!-- Signal box -->
       <div class="signal-box none" id="sig-box">
         <div class="sig-head">
           <span class="sig-title" id="sig-title">SIGNAL MONITOR</span>
@@ -149,14 +125,14 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
         <div class="sig-grid">
           <div class="sg"><label>AVG 30s MOVE</label><value id="sig-avg" style="color:var(--amber)">$—</value></div>
           <div class="sg"><label>LAST 30s MOVE</label><value id="sig-last">$—</value></div>
-          <div class="sg"><label>DIRECTION</label><value id="sig-dir">—</value></div>
+          <div class="sg"><label>BTC DIRECTION</label><value id="sig-dir">—</value></div>
+          <div class="sg"><label>BUY DIRECTION</label><value id="sig-buy">—</value></div>
           <div class="sg"><label>HISTORY TICKS</label><value id="sig-ticks" style="color:var(--dim2)">0</value></div>
         </div>
-        <!-- Move bar -->
         <div class="move-bar-wrap">
           <div class="move-bar-label">
             <span>0</span>
-            <span>Last 30s move vs 15min average</span>
+            <span>Last 30s vs 15min average</span>
             <span id="sig-bar-max">—</span>
           </div>
           <div class="move-bar-bg">
@@ -168,7 +144,6 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
     </div>
   </div>
 
-  <!-- Stats -->
   <div class="panel">
     <div class="ph"><h3>Session Stats</h3></div>
     <div class="sbar">
@@ -181,19 +156,16 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
     </div>
   </div>
 
-  <!-- Open trades -->
   <div class="panel">
     <div class="ph"><h3>Open Trades</h3><div class="badge" id="oc">0</div></div>
     <div id="open-t"><div class="empty">No open trades</div></div>
   </div>
 
-  <!-- Closed trades -->
   <div class="panel">
     <div class="ph"><h3>Closed Trades</h3><div class="badge" id="cc">0</div></div>
     <div id="closed-t"><div class="empty">No closed trades yet</div></div>
   </div>
 
-  <!-- Log -->
   <div class="panel">
     <div class="ph"><h3>System Log</h3><div class="badge" id="lc">0</div></div>
     <div id="logb"></div>
@@ -203,13 +175,12 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
 <script>
 var socket = io();
 var logCount = 0;
-var lastSnap = null;
 
 socket.on('connect',    function(){ document.getElementById('wsdot').classList.remove('off'); });
 socket.on('disconnect', function(){ document.getElementById('wsdot').classList.add('off'); });
 
 socket.on('prices', function(p) {
-  if (p.binancePrice)   { set('p-btc', '$' + p.binancePrice.toFixed(2)); }
+  if (p.binancePrice)   set('p-btc', '$' + p.binancePrice.toFixed(2));
   if (p.chainlinkPrice && p.chainlinkPrice > 0) set('p-chl', '$' + p.chainlinkPrice.toFixed(2));
   if (p.upPrice)  set('p-up', p.upPrice > 0 ? p.upPrice.toFixed(3) : '—');
   if (p.dnPrice)  set('p-dn', p.dnPrice > 0 ? p.dnPrice.toFixed(3) : '—');
@@ -217,7 +188,6 @@ socket.on('prices', function(p) {
 });
 
 socket.on('snapshot', function(d) {
-  lastSnap = d;
   set('h-bal',  '$' + d.balance.toFixed(2));
   set('h-open', d.openTrades.length);
   set('oc',     d.openTrades.length);
@@ -225,11 +195,10 @@ socket.on('snapshot', function(d) {
   var pe = document.getElementById('h-pnl');
   pe.textContent = (d.totalPnl >= 0 ? '+$' : '-$') + Math.abs(d.totalPnl).toFixed(2);
   pe.className = 'val' + (d.totalPnl > 0 ? ' pos' : d.totalPnl < 0 ? ' neg' : '');
-
   var cl = d.closedTrades;
-  var wins   = cl.filter(function(t){return (t.realizedPnl||0)>0;}).length;
-  var losses = cl.filter(function(t){return (t.realizedPnl||0)<0;}).length;
-  var profit = cl.filter(function(t){return (t.realizedPnl||0)>0;}).reduce(function(s,t){return s+(t.realizedPnl||0);},0);
+  var wins    = cl.filter(function(t){return (t.realizedPnl||0)>0;}).length;
+  var losses  = cl.filter(function(t){return (t.realizedPnl||0)<0;}).length;
+  var profit  = cl.filter(function(t){return (t.realizedPnl||0)>0;}).reduce(function(s,t){return s+(t.realizedPnl||0);},0);
   var windows = new Set(cl.map(function(t){return t.windowStart;})).size;
   set('st-win',    windows);
   set('st-sig',    cl.length + d.openTrades.length);
@@ -239,7 +208,6 @@ socket.on('snapshot', function(d) {
   var spnl = document.getElementById('st-pnl');
   spnl.textContent = (d.totalPnl >= 0 ? '+$' : '-$') + Math.abs(d.totalPnl).toFixed(2);
   spnl.style.color = d.totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
-
   if (d.signal)  renderSignal(d.signal);
   if (d.window)  renderWindow(d.window);
   renderOpen(d.openTrades);
@@ -251,38 +219,42 @@ socket.on('log', function(line){ addLog(line); });
 function set(id, v){ var e = document.getElementById(id); if(e) e.textContent = v; }
 
 function renderSignal(s) {
-  set('p-btc',     s.binancePrice > 0 ? '$' + s.binancePrice.toFixed(2) : '$—');
+  if (s.binancePrice) set('p-btc', '$' + s.binancePrice.toFixed(2));
   set('sig-avg',   '$' + s.avg30sMove.toFixed(2));
   set('sig-last',  '$' + s.last30sMove.toFixed(2));
   set('sig-ticks', s.historyCount);
   set('w-next',    s.nextCheckIn);
   var dirEl = document.getElementById('sig-dir');
+  var buyEl = document.getElementById('sig-buy');
+  var lastEl = document.getElementById('sig-last');
   if (s.last30sDir) {
     dirEl.textContent = s.last30sDir === 'UP' ? '↑ UP' : '↓ DOWN';
     dirEl.style.color = s.last30sDir === 'UP' ? 'var(--green)' : 'var(--red)';
+    lastEl.style.color = s.last30sDir === 'UP' ? 'var(--green)' : 'var(--red)';
   } else {
-    dirEl.textContent = '—';
-    dirEl.style.color = 'var(--dim2)';
+    dirEl.textContent = '—'; dirEl.style.color = 'var(--dim2)';
+    lastEl.style.color = 'var(--text)';
   }
-  var lastEl = document.getElementById('sig-last');
-  if (lastEl) {
-    lastEl.style.color = s.last30sDir === 'UP' ? 'var(--green)' : s.last30sDir === 'DOWN' ? 'var(--red)' : 'var(--text)';
+  if (s.reversedDir) {
+    buyEl.textContent = s.reversedDir === 'UP' ? '↑ BUY UP' : '↓ BUY DOWN';
+    buyEl.style.color = s.reversedDir === 'UP' ? 'var(--green)' : 'var(--red)';
+  } else {
+    buyEl.textContent = '—'; buyEl.style.color = 'var(--dim2)';
   }
-  // Signal box state
-  var box = document.getElementById('sig-box');
-  var title = document.getElementById('sig-title');
+  var box    = document.getElementById('sig-box');
+  var title  = document.getElementById('sig-title');
   var status = document.getElementById('sig-status');
-  if (s.isSignal && s.last30sDir) {
-    box.className = 'signal-box ' + s.last30sDir.toLowerCase();
-    title.textContent = '🚀 SIGNAL: BTC ' + s.last30sDir + ' $' + s.last30sMove.toFixed(2) + ' > avg $' + s.avg30sMove.toFixed(2);
-    title.style.color = s.last30sDir === 'UP' ? 'var(--green)' : 'var(--red)';
+  if (s.isSignal && s.reversedDir) {
+    box.className = 'signal-box ' + s.reversedDir.toLowerCase();
+    title.textContent = '🔄 REVERSION: BTC moved ' + (s.last30sDir||'') + ' $' + s.last30sMove.toFixed(2) + ' → BUYING ' + s.reversedDir;
+    title.style.color = s.reversedDir === 'UP' ? 'var(--green)' : 'var(--red)';
     status.textContent = 'FIRING TRADE';
-    status.style.color = s.last30sDir === 'UP' ? 'var(--green)' : 'var(--red)';
+    status.style.color = s.reversedDir === 'UP' ? 'var(--green)' : 'var(--red)';
   } else if (s.avg30sMove > 0) {
     box.className = 'signal-box none';
     title.textContent = 'SIGNAL MONITOR';
     title.style.color = 'var(--text)';
-    status.textContent = 'last=$' + s.last30sMove.toFixed(2) + ' avg=$' + s.avg30sMove.toFixed(2) + ' — ' + (s.last30sMove > s.avg30sMove ? 'above avg' : 'below avg');
+    status.textContent = 'last=$' + s.last30sMove.toFixed(2) + ' avg=$' + s.avg30sMove.toFixed(2) + ' — ' + (s.last30sMove > s.avg30sMove ? 'above avg — waiting for check' : 'below avg');
     status.style.color = s.last30sMove > s.avg30sMove ? 'var(--amber)' : 'var(--dim2)';
   } else {
     box.className = 'signal-box none';
@@ -291,14 +263,13 @@ function renderSignal(s) {
     status.textContent = 'Collecting 15min history (' + s.historyCount + ' ticks)…';
     status.style.color = 'var(--dim2)';
   }
-  // Move bar
   if (s.avg30sMove > 0) {
-    var max = Math.max(s.avg30sMove * 2, s.last30sMove * 1.2);
+    var max     = Math.max(s.avg30sMove * 2, s.last30sMove * 1.2);
     var avgPct  = Math.min(100, (s.avg30sMove / max) * 100);
     var lastPct = Math.min(100, (s.last30sMove / max) * 100);
-    document.getElementById('sig-bar-avg').style.left  = avgPct + '%';
+    document.getElementById('sig-bar-avg').style.left   = avgPct + '%';
     document.getElementById('sig-bar-fill').style.width = lastPct + '%';
-    document.getElementById('sig-bar-fill').className = 'move-bar-fill ' + (s.last30sDir === 'DOWN' ? 'down' : 'up');
+    document.getElementById('sig-bar-fill').className   = 'move-bar-fill ' + (s.last30sDir === 'DOWN' ? 'down' : 'up');
     set('sig-bar-max', '$' + max.toFixed(0));
   }
 }
@@ -360,7 +331,7 @@ function renderClosed(trades) {
 function addLog(line) {
   var el = document.createElement('div');
   var c = 'll';
-  if (line.indexOf('TRADE') >= 0 || line.indexOf('🚀') >= 0) c += ' trade';
+  if (line.indexOf('REVERSION') >= 0 || line.indexOf('🚀') >= 0) c += ' trade';
   else if (line.indexOf('Signal') >= 0 || line.indexOf('📊') >= 0) c += ' signal';
   else if (line.indexOf('🟢') >= 0 || line.indexOf('RESOLVED') >= 0) c += ' win';
   else if (line.indexOf('🔴') >= 0) c += ' loss';
