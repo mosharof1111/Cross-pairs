@@ -26,6 +26,12 @@ const HISTORY_WINDOW   = 900;
 const BUCKET_SIZE      = 30;
 const STARTING_BALANCE = 1000;
 
+// ── Three filters ─────────────────────────────────────────────────────────────
+const TOKEN_MIN        = 0.20;  // Filter 1: never buy below this
+const TOKEN_MAX        = 0.80;  // Filter 1: never buy above this
+const MOVE_MULTIPLIER  = 1.5;   // Filter 2: move must be 1.5x avg not just above
+const TREND_BUCKETS    = 3;     // Filter 3: skip if last 3 buckets same direction
+
 let state = { balance: STARTING_BALANCE, openTrades: [], closedTrades: [], totalPnl: 0 };
 const priceBook    = {};
 const marketCache  = {};
@@ -83,9 +89,7 @@ function connectBinance() {
   if (binanceWs) { try { binanceWs.terminate(); } catch(_){} }
   log('🔗 Connecting Binance BTC/USDT aggTrade…');
   binanceWs = new WebSocket(BINANCE_WS);
-
   binanceWs.on('open', () => log('✅ Binance WS connected'));
-
   binanceWs.on('message', (raw) => {
     try {
       const msg   = JSON.parse(raw);
@@ -102,11 +106,7 @@ function connectBinance() {
       }
     } catch (_) {}
   });
-
-  binanceWs.on('close', () => {
-    log('⚡ Binance WS closed — reconnecting in 3s…');
-    setTimeout(connectBinance, 3000);
-  });
+  binanceWs.on('close', () => { log('⚡ Binance WS closed — reconnecting in 3s…'); setTimeout(connectBinance, 3000); });
   binanceWs.on('error', e => log(`⚠️  Binance: ${e.message}`));
 }
 
@@ -177,13 +177,29 @@ function getAverage30sMove() {
 function getLast30sMove() {
   const nowSec   = Math.floor(Date.now() / 1000);
   const inBucket = priceHistory.filter(h => h.ts >= nowSec - BUCKET_SIZE);
-  if (inBucket.length < 2) return { change: 0, absChange: 0, direction: null, first: 0, last: 0 };
+  if (inBucket.length < 2) return { change: 0, absChange: 0, direction: null };
   const first     = inBucket[0].price;
   const last      = inBucket[inBucket.length - 1].price;
   const change    = last - first;
-  const absChange = Math.abs(change);
-  const direction = change > 0 ? 'UP' : 'DOWN';
-  return { change, absChange, direction, first, last };
+  return { change, absChange: Math.abs(change), direction: change > 0 ? 'UP' : 'DOWN' };
+}
+
+// Filter 3 — check if last N buckets are all same direction (trending)
+function isTrending() {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const directions = [];
+  for (let i = 0; i < TREND_BUCKETS; i++) {
+    const bucketEnd   = nowSec - i * BUCKET_SIZE;
+    const bucketStart = bucketEnd - BUCKET_SIZE;
+    const inBucket    = priceHistory.filter(h => h.ts >= bucketStart && h.ts < bucketEnd);
+    if (inBucket.length < 2) continue;
+    const first = inBucket[0].price;
+    const last  = inBucket[inBucket.length - 1].price;
+    directions.push(last > first ? 'UP' : 'DOWN');
+  }
+  if (directions.length < TREND_BUCKETS) return false;
+  // All same direction = trending
+  return directions.every(d => d === directions[0]);
 }
 
 function checkSignal() {
@@ -193,47 +209,58 @@ function checkSignal() {
 
   const w = marketCache[currentWindowStart()];
   if (!w) return;
-
-  if (priceHistory.length < 10) {
-    log(`⏳ Not enough price history yet (${priceHistory.length} ticks)`);
-    return;
-  }
+  if (priceHistory.length < 10) { log(`⏳ Building history (${priceHistory.length} ticks)…`); return; }
 
   const avg  = getAverage30sMove();
   const last = getLast30sMove();
 
   if (!last.direction || last.absChange === 0) {
-    log(`📊 Signal check: avg=$${avg.toFixed(2)} last30s=$${(last.absChange||0).toFixed(2)} — no move`);
+    log(`📊 avg=$${avg.toFixed(2)} last=$${last.absChange.toFixed(2)} — no move`);
     return;
   }
 
-  log(`📊 Signal check: avg30s=$${avg.toFixed(2)} | last30s=${last.direction} $${last.absChange.toFixed(2)} | ${last.absChange > avg ? '✅ ABOVE AVG — firing reversion' : '❌ below avg'}`);
+  // Filter 2 — move must be 1.5x average
+  const required = avg * MOVE_MULTIPLIER;
+  if (last.absChange <= required) {
+    log(`📊 avg=$${avg.toFixed(2)} last=${last.direction} $${last.absChange.toFixed(2)} need=$${required.toFixed(2)} — below 1.5x threshold`);
+    return;
+  }
 
-  if (last.absChange <= avg) return;
+  // Filter 3 — skip if trending (last 3 buckets same direction)
+  if (isTrending()) {
+    log(`📊 avg=$${avg.toFixed(2)} last=${last.direction} $${last.absChange.toFixed(2)} — ⚠️ TRENDING, skipping reversion`);
+    return;
+  }
 
-  // ── MEAN REVERSION — buy opposite direction ───────────────────────────────
   const reversed = last.direction === 'UP' ? 'DOWN' : 'UP';
-  placeTrade(w, reversed, last.absChange, avg);
+  const token    = reversed === 'UP' ? w.btcUp : w.btcDn;
+  const price    = getPrice(token);
+
+  // Filter 1 — token must be between 0.20 and 0.80
+  if (price < TOKEN_MIN || price > TOKEN_MAX) {
+    log(`📊 avg=$${avg.toFixed(2)} last=${last.direction} $${last.absChange.toFixed(2)} — ⚠️ token=${price.toFixed(3)} outside 0.20-0.80 range, skip`);
+    return;
+  }
+
+  log(`📊 avg=$${avg.toFixed(2)} | last=${last.direction} $${last.absChange.toFixed(2)} > 1.5x=$${required.toFixed(2)} | not trending | token=${price.toFixed(3)} ✅ FIRING`);
+  placeTrade(w, reversed, last.absChange, avg, required);
 }
 
-function placeTrade(w, direction, move, avg) {
+function placeTrade(w, direction, move, avg, required) {
   if (state.balance < ENTRY_AMOUNT) { log(`💸 Low balance`); return; }
-
   const token = direction === 'UP' ? w.btcUp : w.btcDn;
   const price = getPrice(token);
-  if (!price || price <= 0) { log(`⚠️  No token price for ${direction}`); return; }
-
+  if (!price || price <= 0) { log(`⚠️  No token price`); return; }
   const cost = +(price * TRADE_SHARES).toFixed(2);
   if (state.balance < cost) { log(`💸 Low balance for $${cost}`); return; }
-
   const id  = tradeId();
   const cws = currentWindowStart();
   state.balance -= cost;
-
   const trade = {
     id, windowStart: cws, side: direction, type: 'REVERSION',
     entryPrice: price, shares: TRADE_SHARES, cost,
     btcMove: +move.toFixed(2), avgMove: +avg.toFixed(2),
+    required: +required.toFixed(2),
     btcPriceAtEntry: +binanceBtcPrice.toFixed(2),
     openedAt: new Date().toISOString(), floatingPnl: 0,
   };
@@ -241,8 +268,7 @@ function placeTrade(w, direction, move, avg) {
   if (!windowState[cws]) windowState[cws] = { trades: 0 };
   windowState[cws].trades++;
   saveState();
-
-  log(`🚀 REVERSION ${direction} [${id}] token=${price.toFixed(3)} shares=${TRADE_SHARES} cost=$${cost} | BTC moved ${move > 0 ? '+' : ''}$${move.toFixed(2)} > avg=$${avg.toFixed(2)} → expect reversion | bal=$${state.balance.toFixed(2)}`);
+  log(`🚀 REVERSION ${direction} [${id}] token=${price.toFixed(3)} shares=${TRADE_SHARES} cost=$${cost} | $${move.toFixed(2)} > 1.5x=$${required.toFixed(2)} | bal=$${state.balance.toFixed(2)}`);
   emitFn('snapshot', buildDashboardSnapshot());
 }
 
@@ -414,6 +440,8 @@ function buildDashboardSnapshot() {
   const dnPrice = w ? getPrice(w.btcDn) : 0;
   const avg     = getAverage30sMove();
   const last    = getLast30sMove();
+  const trending = isTrending();
+  const required = avg * MOVE_MULTIPLIER;
   return {
     balance:      +state.balance.toFixed(2),
     totalPnl:     +state.totalPnl.toFixed(2),
@@ -423,11 +451,12 @@ function buildDashboardSnapshot() {
       binancePrice:   +binanceBtcPrice.toFixed(2),
       chainlinkPrice: +chainlinkBtcPrice.toFixed(2),
       avg30sMove:     +avg.toFixed(2),
+      required:       +required.toFixed(2),
       last30sMove:    +(last.absChange||0).toFixed(2),
       last30sDir:     last.direction || null,
-      last30sChange:  +(last.change||0).toFixed(2),
-      isSignal:       last.absChange > avg && avg > 0,
       reversedDir:    last.direction ? (last.direction === 'UP' ? 'DOWN' : 'UP') : null,
+      isSignal:       last.absChange > required && avg > 0 && !trending,
+      trending,
       historyCount:   priceHistory.length,
       nextCheckIn:    SIGNAL_INTERVAL - ((nowSec - lastSignalCheck) % SIGNAL_INTERVAL),
     },
@@ -438,7 +467,7 @@ function buildDashboardSnapshot() {
       upPrice:          +upPrice.toFixed(3),
       dnPrice:          +dnPrice.toFixed(3),
       tradesThisWindow: wst.trades || 0,
-      openInWindow:     state.openTrades.filter(t => t.windowStart === cws).length,
+      serverTime:       nowSec,
     } : null,
   };
 }
@@ -464,8 +493,8 @@ async function tick() {
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
-  log('🚀 BTC Mean Reversion Bot — Binance 30s signal | reverse direction | 20 shares | every 30s');
-  log(`   History: ${HISTORY_WINDOW/60}min | bucket: ${BUCKET_SIZE}s | $${ENTRY_AMOUNT}/trade | multi-fire`);
+  log('🚀 BTC Mean Reversion Bot — filters: token 0.20-0.80 | 1.5x avg | no trend');
+  log(`   History: ${HISTORY_WINDOW/60}min | bucket: ${BUCKET_SIZE}s | $${ENTRY_AMOUNT}/trade`);
   loadState();
   await fetchInitialChainlinkPrice();
   connectBinance();
