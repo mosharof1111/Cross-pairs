@@ -14,17 +14,21 @@ const BINANCE_ETH_WS = 'wss://stream.binance.com:9443/ws/ethusdt@aggTrade';
 
 // ── Market configs ────────────────────────────────────────────────────────────
 const MARKETS = {
-  'btc-5m':  { asset: 'BTC', slug: 'btc-updown-5m',  windowSize: 300,  signalInterval: 30,  bucketSize: 30,  historyWindow: 900,   shares: 50 },
-  'eth-5m':  { asset: 'ETH', slug: 'eth-updown-5m',  windowSize: 300,  signalInterval: 30,  bucketSize: 30,  historyWindow: 900,   shares: 50 },
-  'btc-15m': { asset: 'BTC', slug: 'btc-updown-15m', windowSize: 900,  signalInterval: 90,  bucketSize: 90,  historyWindow: 2700,  shares: 50 },
-  'eth-15m': { asset: 'ETH', slug: 'eth-updown-15m', windowSize: 900,  signalInterval: 90,  bucketSize: 90,  historyWindow: 2700,  shares: 50 },
+  'btc-5m':  { asset: 'BTC', slug: 'btc-updown-5m',  windowSize: 300,  blockSize: 30,  historyWindow: 900,  shares: 50 },
+  'eth-5m':  { asset: 'ETH', slug: 'eth-updown-5m',  windowSize: 300,  blockSize: 30,  historyWindow: 900,  shares: 50 },
+  'btc-15m': { asset: 'BTC', slug: 'btc-updown-15m', windowSize: 900,  blockSize: 90,  historyWindow: 2700, shares: 50 },
+  'eth-15m': { asset: 'ETH', slug: 'eth-updown-15m', windowSize: 900,  blockSize: 90,  historyWindow: 2700, shares: 50 },
 };
 
 const TOKEN_MIN       = 0.10;
 const TOKEN_MAX       = 0.90;
 const MOVE_MULTIPLIER = 0.5;
 const TREND_BUCKETS   = 3;
-const STARTING_BALANCE = 1000;
+const STARTING_BALANCE = 2000;
+
+// How far back to measure "last move" when firing intra-block
+// Use 2/3 of block size so we have enough data even early in block
+const LAST_MOVE_WINDOW = { 30: 20, 90: 60 };
 
 let state = {
   balance: STARTING_BALANCE,
@@ -35,13 +39,15 @@ let state = {
   pnl15m: 0,
 };
 
-const priceBook   = {};
-const marketCache = {};   // key = `${marketId}:${ts}`
-const windowState = {};   // key = `${marketId}:${ts}`
+const priceBook    = {};
+const marketCache  = {};
+const windowState  = {};
 
-// Price history per asset
-const priceHistory = { BTC: [], ETH: [] };
-const lastSignalCheck = { 'btc-5m': 0, 'eth-5m': 0, 'btc-15m': 0, 'eth-15m': 0 };
+// Track which block has already fired per market
+// key = `${marketId}:${blockNumber}` where blockNumber = floor(nowSec / blockSize)
+const firedBlocks  = {};
+
+const priceHistory    = { BTC: [], ETH: [] };
 const binancePrices   = { BTC: 0, ETH: 0 };
 const binanceLastLog  = { BTC: 0, ETH: 0 };
 const binanceLastPx   = { BTC: 0, ETH: 0 };
@@ -74,6 +80,11 @@ function currentWindowStart(windowSize) {
   return Math.floor(Math.floor(Date.now() / 1000) / windowSize) * windowSize;
 }
 
+// Current block number — increments every blockSize seconds, globally unique
+function currentBlockNumber(blockSize) {
+  return Math.floor(Math.floor(Date.now() / 1000) / blockSize);
+}
+
 function getPrice(tid) {
   const b = priceBook[tid];
   if (!b) return 0;
@@ -102,9 +113,7 @@ function connectBinance(asset, url) {
       binancePrices[asset] = price;
       const nowSec = Math.floor(Date.now() / 1000);
       priceHistory[asset].push({ ts: nowSec, price });
-      // Keep max 45 min history
       priceHistory[asset] = priceHistory[asset].filter(h => h.ts >= nowSec - 2700);
-      // Log on $1+ move (BTC) or $0.50+ move (ETH), max every 5s
       const threshold = asset === 'BTC' ? 1 : 0.5;
       if (Math.abs(price - binanceLastPx[asset]) >= threshold && nowSec - binanceLastLog[asset] >= 5) {
         const change = price - binanceLastPx[asset];
@@ -112,6 +121,8 @@ function connectBinance(asset, url) {
         binanceLastPx[asset]  = price;
         binanceLastLog[asset] = nowSec;
       }
+      // Check signals on every price tick — this is the key change
+      checkSignalsForAsset(asset);
     } catch (_) {}
   });
 
@@ -126,14 +137,14 @@ function connectBinance(asset, url) {
 }
 
 // ── Signal logic ──────────────────────────────────────────────────────────────
-function getAverageMove(asset, bucketSize, historyWindow) {
+function getAverageMove(asset, blockSize, historyWindow) {
   const nowSec = Math.floor(Date.now() / 1000);
   const hist   = priceHistory[asset].filter(h => h.ts >= nowSec - historyWindow);
   const moves  = [];
-  const numBuckets = Math.floor(historyWindow / bucketSize);
+  const numBuckets = Math.floor(historyWindow / blockSize);
   for (let i = 0; i < numBuckets; i++) {
-    const bucketEnd   = nowSec - i * bucketSize;
-    const bucketStart = bucketEnd - bucketSize;
+    const bucketEnd   = nowSec - i * blockSize;
+    const bucketStart = bucketEnd - blockSize;
     const inBucket    = hist.filter(h => h.ts >= bucketStart && h.ts < bucketEnd);
     if (inBucket.length < 2) continue;
     const prices = inBucket.map(h => h.price);
@@ -144,22 +155,23 @@ function getAverageMove(asset, bucketSize, historyWindow) {
   return moves.reduce((s, m) => s + m, 0) / moves.length;
 }
 
-function getLastBucketMove(asset, bucketSize) {
+// Get move over last N seconds — used for intra-block detection
+function getRecentMove(asset, seconds) {
   const nowSec   = Math.floor(Date.now() / 1000);
-  const inBucket = priceHistory[asset].filter(h => h.ts >= nowSec - bucketSize);
-  if (inBucket.length < 2) return { change: 0, absChange: 0, direction: null };
-  const first  = inBucket[0].price;
-  const last   = inBucket[inBucket.length - 1].price;
+  const inWindow = priceHistory[asset].filter(h => h.ts >= nowSec - seconds);
+  if (inWindow.length < 2) return { change: 0, absChange: 0, direction: null };
+  const first  = inWindow[0].price;
+  const last   = inWindow[inWindow.length - 1].price;
   const change = last - first;
   return { change, absChange: Math.abs(change), direction: change > 0 ? 'UP' : 'DOWN' };
 }
 
-function isTrending(asset, bucketSize) {
+function isTrending(asset, blockSize) {
   const nowSec     = Math.floor(Date.now() / 1000);
   const directions = [];
   for (let i = 0; i < TREND_BUCKETS; i++) {
-    const bucketEnd   = nowSec - i * bucketSize;
-    const bucketStart = bucketEnd - bucketSize;
+    const bucketEnd   = nowSec - i * blockSize;
+    const bucketStart = bucketEnd - blockSize;
     const inBucket    = priceHistory[asset].filter(h => h.ts >= bucketStart && h.ts < bucketEnd);
     if (inBucket.length < 2) continue;
     const first = inBucket[0].price;
@@ -170,49 +182,61 @@ function isTrending(asset, bucketSize) {
   return directions.every(d => d === directions[0]);
 }
 
-function checkSignals() {
-  const nowSec = Math.floor(Date.now() / 1000);
+// Called on every Binance price tick for a given asset
+function checkSignalsForAsset(asset) {
   for (const [marketId, cfg] of Object.entries(MARKETS)) {
-    if (nowSec - lastSignalCheck[marketId] < cfg.signalInterval) continue;
-    lastSignalCheck[marketId] = nowSec;
+    if (cfg.asset !== asset) continue;
 
-    const cws = currentWindowStart(cfg.windowSize);
+    const cws      = currentWindowStart(cfg.windowSize);
     const cacheKey = `${marketId}:${cws}`;
-    const w = marketCache[cacheKey];
+    const w        = marketCache[cacheKey];
     if (!w) continue;
 
-    const hist = priceHistory[cfg.asset];
+    const hist = priceHistory[asset];
     if (hist.length < 10) continue;
 
-    const avg      = getAverageMove(cfg.asset, cfg.bucketSize, cfg.historyWindow);
-    const last     = getLastBucketMove(cfg.asset, cfg.bucketSize);
+    // Check if this block has already fired
+    const blockNum  = currentBlockNumber(cfg.blockSize);
+    const blockKey  = `${marketId}:${blockNum}`;
+    if (firedBlocks[blockKey]) continue;
+
+    const avg      = getAverageMove(asset, cfg.blockSize, cfg.historyWindow);
+    if (avg === 0) continue;
+
+    // Use recent move window — 2/3 of block size — catches intra-block moves
+    const lookback = LAST_MOVE_WINDOW[cfg.blockSize] || Math.floor(cfg.blockSize * 0.66);
+    const last     = getRecentMove(asset, lookback);
     const required = avg * MOVE_MULTIPLIER;
 
     if (!last.direction || last.absChange === 0) continue;
-    if (last.absChange <= required) {
-      log(`📊 [${marketId}] avg=$${avg.toFixed(2)} last=${last.direction} $${last.absChange.toFixed(2)} need=$${required.toFixed(2)} — below threshold`);
-      continue;
-    }
-    if (isTrending(cfg.asset, cfg.bucketSize)) {
-      log(`📊 [${marketId}] avg=$${avg.toFixed(2)} last=${last.direction} $${last.absChange.toFixed(2)} — TRENDING, skip`);
-      continue;
-    }
-
-    const reversed    = last.direction === 'UP' ? 'DOWN' : 'UP';
-    const token       = reversed === 'UP' ? w.upToken : w.dnToken;
-    const tokenPrice  = getPrice(token);
-
-    if (tokenPrice < TOKEN_MIN || tokenPrice > TOKEN_MAX) {
-      log(`📊 [${marketId}] token=${tokenPrice.toFixed(3)} outside 0.10-0.90, skip`);
+    if (last.absChange <= required) continue;
+    if (isTrending(asset, cfg.blockSize)) {
+      // Only log trending block once per block
+      const trendKey = `${blockKey}:trend`;
+      if (!firedBlocks[trendKey]) {
+        log(`📊 [${marketId}] TRENDING — skip | block=${blockNum}`);
+        firedBlocks[trendKey] = true;
+      }
       continue;
     }
 
-    log(`📊 [${marketId}] avg=$${avg.toFixed(2)} last=${last.direction} $${last.absChange.toFixed(2)} > 0.5x=$${required.toFixed(2)} | token=${tokenPrice.toFixed(3)} ✅ FIRING`);
-    placeTrade(marketId, cfg, w, cws, reversed, last.absChange, avg, required, tokenPrice);
+    const reversed   = last.direction === 'UP' ? 'DOWN' : 'UP';
+    const token      = reversed === 'UP' ? w.upToken : w.dnToken;
+    const tokenPrice = getPrice(token);
+
+    if (tokenPrice < TOKEN_MIN || tokenPrice > TOKEN_MAX) continue;
+
+    // Mark block as fired BEFORE placing trade to prevent double fire
+    firedBlocks[blockKey] = true;
+
+    const nowSec  = Math.floor(Date.now() / 1000);
+    const elapsed = nowSec - (blockNum * cfg.blockSize);
+    log(`📊 [${marketId}] ${last.direction} $${last.absChange.toFixed(2)} > 0.5x=$${required.toFixed(2)} | token=${tokenPrice.toFixed(3)} | fired at ${elapsed}s into block ✅`);
+    placeTrade(marketId, cfg, w, cws, reversed, last.absChange, avg, required, tokenPrice, elapsed);
   }
 }
 
-function placeTrade(marketId, cfg, w, cws, direction, move, avg, required, tokenPrice) {
+function placeTrade(marketId, cfg, w, cws, direction, move, avg, required, tokenPrice, elapsedInBlock) {
   const cost = +(tokenPrice * cfg.shares).toFixed(2);
   if (state.balance < cost) { log(`💸 Low balance for ${marketId}`); return; }
   const id = tradeId();
@@ -225,6 +249,7 @@ function placeTrade(marketId, cfg, w, cws, direction, move, avg, required, token
     btcMove: +move.toFixed(2), avgMove: +avg.toFixed(2),
     required: +required.toFixed(2),
     assetPriceAtEntry: +binancePrices[cfg.asset].toFixed(2),
+    elapsedInBlock: elapsedInBlock || 0,
     openedAt: new Date().toISOString(), floatingPnl: 0,
     timeframe: is15m ? '15m' : '5m',
   };
@@ -233,7 +258,7 @@ function placeTrade(marketId, cfg, w, cws, direction, move, avg, required, token
   if (!windowState[wstKey]) windowState[wstKey] = { trades: 0 };
   windowState[wstKey].trades++;
   saveState();
-  log(`🚀 [${marketId}] REVERSION ${direction} [${id}] token=${tokenPrice.toFixed(3)} shares=${cfg.shares} cost=$${cost} | $${move.toFixed(2)}>0.5x=$${required.toFixed(2)} | bal=$${state.balance.toFixed(2)}`);
+  log(`🚀 [${marketId}] REVERSION ${direction} [${id}] token=${tokenPrice.toFixed(3)} shares=${cfg.shares} cost=$${cost} | $${move.toFixed(2)}>0.5x=$${required.toFixed(2)} | ${elapsedInBlock}s into block | bal=$${state.balance.toFixed(2)}`);
   emitFn('snapshot', buildDashboardSnapshot());
 }
 
@@ -424,32 +449,39 @@ function buildSignalSnapshot(marketId) {
   const w        = marketCache[cacheKey];
   const wst      = windowState[cacheKey] || {};
   const nowSec   = Math.floor(Date.now() / 1000);
-  const avg      = getAverageMove(cfg.asset, cfg.bucketSize, cfg.historyWindow);
-  const last     = getLastBucketMove(cfg.asset, cfg.bucketSize);
-  const trending = isTrending(cfg.asset, cfg.bucketSize);
+  const avg      = getAverageMove(cfg.asset, cfg.blockSize, cfg.historyWindow);
+  const lookback = LAST_MOVE_WINDOW[cfg.blockSize] || Math.floor(cfg.blockSize * 0.66);
+  const last     = getRecentMove(cfg.asset, lookback);
+  const trending = isTrending(cfg.asset, cfg.blockSize);
   const required = avg * MOVE_MULTIPLIER;
   const upPrice  = w ? getPrice(w.upToken) : 0;
   const dnPrice  = w ? getPrice(w.dnToken) : 0;
+  const blockNum = currentBlockNumber(cfg.blockSize);
+  const blockKey = `${marketId}:${blockNum}`;
+  const blockFired = !!firedBlocks[blockKey];
+  const blockElapsed = nowSec - (blockNum * cfg.blockSize);
   return {
     marketId,
-    asset:      cfg.asset,
-    timeframe:  cfg.windowSize === 900 ? '15m' : '5m',
+    asset:       cfg.asset,
+    timeframe:   cfg.windowSize === 900 ? '15m' : '5m',
     windowStart: cws,
-    elapsed:    nowSec - cws,
-    remaining:  Math.max(0, cfg.windowSize - (nowSec - cws)),
-    windowSize: cfg.windowSize,
-    assetPrice: +binancePrices[cfg.asset].toFixed(2),
-    upPrice:    +upPrice.toFixed(3),
-    dnPrice:    +dnPrice.toFixed(3),
-    avg,
-    required:   +required.toFixed(2),
-    last30sMove:   +(last.absChange||0).toFixed(2),
-    last30sDir:    last.direction,
-    reversedDir:   last.direction ? (last.direction === 'UP' ? 'DOWN' : 'UP') : null,
-    isSignal:      last.absChange > required && avg > 0 && !trending,
+    elapsed:     nowSec - cws,
+    remaining:   Math.max(0, cfg.windowSize - (nowSec - cws)),
+    windowSize:  cfg.windowSize,
+    blockSize:   cfg.blockSize,
+    blockElapsed,
+    blockFired,
+    assetPrice:  +binancePrices[cfg.asset].toFixed(2),
+    upPrice:     +upPrice.toFixed(3),
+    dnPrice:     +dnPrice.toFixed(3),
+    avg:         +avg.toFixed(2),
+    required:    +required.toFixed(2),
+    lastMove:    +(last.absChange||0).toFixed(2),
+    lastDir:     last.direction,
+    reversedDir: last.direction ? (last.direction === 'UP' ? 'DOWN' : 'UP') : null,
+    isSignal:    last.absChange > required && avg > 0 && !trending && !blockFired,
     trending,
-    historyCount:  priceHistory[cfg.asset].length,
-    nextCheckIn:   cfg.signalInterval - ((nowSec - lastSignalCheck[marketId]) % cfg.signalInterval),
+    historyCount: priceHistory[cfg.asset].length,
     tradesThisWindow: wst.trades || 0,
   };
 }
@@ -473,10 +505,18 @@ function buildDashboardSnapshot() {
 
 function prune() {
   const nowSec = Math.floor(Date.now() / 1000);
+  // Prune market cache
   for (const key of Object.keys(marketCache)) {
     const [marketId, tsStr] = key.split(':');
     const cfg = MARKETS[marketId];
     if (cfg && Number(tsStr) < nowSec - cfg.windowSize * 3) delete marketCache[key];
+  }
+  // Prune fired blocks older than 2 hours
+  const cutoff = Math.floor(nowSec / 30) - 240;
+  for (const key of Object.keys(firedBlocks)) {
+    const parts = key.split(':');
+    const blockNum = Number(parts[parts.length - 1]);
+    if (!isNaN(blockNum) && blockNum < cutoff) delete firedBlocks[key];
   }
 }
 
@@ -487,7 +527,6 @@ async function tick() {
     await refreshMarkets();
     await pollPrices();
     updateFloating();
-    checkSignals();
     await checkResolution();
     emitFn('snapshot', buildDashboardSnapshot());
   } catch (e) { log(`⚠️  tick: ${e.message}`); }
@@ -495,9 +534,9 @@ async function tick() {
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
-  log('🚀 Multi-Market Reversion Bot — BTC+ETH × 5m+15m');
-  log('   5m: 30s signal/bucket | 15min history | 50 shares');
-  log('   15m: 90s signal/bucket | 45min history | 50 shares');
+  log('🚀 Multi-Market Reversion Bot — intra-block firing');
+  log('   5m: 30s blocks | fire on condition | 15min history | 50 shares');
+  log('   15m: 90s blocks | fire on condition | 45min history | 50 shares');
   log('   Filters: token 0.10-0.90 | 0.5x avg | no trend');
   loadState();
   connectBinance('BTC', BINANCE_BTC_WS);
