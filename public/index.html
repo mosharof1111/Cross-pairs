@@ -38,14 +38,13 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
 .prog{height:100%;border-radius:2px;}
 .prog.ok{background:linear-gradient(90deg,var(--green),var(--cyan));}
 .prog.warn{background:linear-gradient(90deg,var(--amber),var(--red));}
-.price-row{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:14px;}
+.price-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px;}
 .pcell{background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:4px;padding:8px 10px;}
 .pcell label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:4px;}
-.pcell .pval{font-size:20px;font-weight:700;}
+.pcell .pval{font-size:22px;font-weight:700;}
 .pcell .pval.btc{color:var(--amber);}
 .pcell .pval.up{color:var(--green);}
 .pcell .pval.dn{color:var(--red);}
-.pcell .pval.chl{color:var(--cyan);}
 .signal-box{border-radius:5px;padding:12px;margin-bottom:14px;border:1px solid var(--border);}
 .signal-box.none{background:rgba(255,255,255,0.02);}
 .signal-box.up{background:rgba(0,230,118,0.08);border-color:var(--green);}
@@ -97,7 +96,7 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
 <header>
   <div>
     <div class="brand">BTC <em>REVERSION</em> BOT</div>
-    <div class="sub">TOKEN 0.10-0.90 · 0.5× AVG · NO TREND · 15s SIGNAL · 20 SHARES · MULTI-FIRE</div>
+    <div class="sub">TOKEN 0.10-0.90 · 0.5× AVG · NO TREND · 15s SIGNAL · 15s BUCKET · 20 SHARES</div>
   </div>
   <div class="hstats">
     <div class="hstat"><label>BALANCE</label><div class="val" id="h-bal">$—</div></div>
@@ -119,21 +118,23 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
         </div>
       </div>
       <div class="prog-wrap"><div class="prog ok" id="prog" style="width:0%"></div></div>
+
+      <!-- 3 column price row — no Chainlink -->
       <div class="price-row">
         <div class="pcell"><label>🟡 BTC/USD Binance</label><div class="pval btc" id="p-btc">$—</div></div>
-        <div class="pcell"><label>⛓️ Chainlink</label><div class="pval chl" id="p-chl">$—</div></div>
         <div class="pcell"><label>↑ UP token</label><div class="pval up" id="p-up">—</div></div>
         <div class="pcell"><label>↓ DOWN token</label><div class="pval dn" id="p-dn">—</div></div>
       </div>
+
       <div class="signal-box none" id="sig-box">
         <div class="sig-head">
           <span class="sig-title" id="sig-title">SIGNAL MONITOR</span>
           <span id="sig-status" style="font-size:10px;color:var(--dim2)">Collecting data…</span>
         </div>
         <div class="sig-grid">
-          <div class="sg"><label>AVG 30s</label><value id="sig-avg" style="color:var(--amber)">$—</value></div>
+          <div class="sg"><label>AVG 15s</label><value id="sig-avg" style="color:var(--amber)">$—</value></div>
           <div class="sg"><label>NEED (0.5×)</label><value id="sig-req" style="color:var(--purple)">$—</value></div>
-          <div class="sg"><label>LAST 30s</label><value id="sig-last">$—</value></div>
+          <div class="sg"><label>LAST 15s</label><value id="sig-last">$—</value></div>
           <div class="sg"><label>BTC DIR</label><value id="sig-dir">—</value></div>
           <div class="sg"><label>BUY DIR</label><value id="sig-buy">—</value></div>
         </div>
@@ -145,7 +146,7 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:860px;ma
         <div class="move-bar-wrap">
           <div class="move-bar-label">
             <span>0</span>
-            <span>Last 30s vs avg (🟡) and 0.5× (🟣)</span>
+            <span>Last 15s vs avg (🟡) and 0.5× (🟣)</span>
             <span id="sig-bar-max">—</span>
           </div>
           <div class="move-bar-bg">
@@ -219,8 +220,7 @@ socket.on('connect',    function(){ document.getElementById('wsdot').classList.r
 socket.on('disconnect', function(){ document.getElementById('wsdot').classList.add('off'); });
 
 socket.on('prices', function(p) {
-  if (p.binancePrice)    set('p-btc', '$' + p.binancePrice.toFixed(2));
-  if (p.chainlinkPrice && p.chainlinkPrice > 0) set('p-chl', '$' + p.chainlinkPrice.toFixed(2));
+  if (p.binancePrice) set('p-btc', '$' + p.binancePrice.toFixed(2));
   if (p.upPrice)  set('p-up', p.upPrice > 0 ? p.upPrice.toFixed(3) : '—');
   if (p.dnPrice)  set('p-dn', p.dnPrice > 0 ? p.dnPrice.toFixed(3) : '—');
   set('w-upd', new Date().toLocaleTimeString());
@@ -395,7 +395,7 @@ function addLog(line) {
   else if (line.indexOf('📊') >= 0 || line.indexOf('Signal') >= 0) c += ' signal';
   else if (line.indexOf('🟢') >= 0 || line.indexOf('RESOLVED') >= 0) c += ' win';
   else if (line.indexOf('🔴') >= 0) c += ' loss';
-  else if (line.indexOf('💹') >= 0 || line.indexOf('⛓️') >= 0) c += ' price';
+  else if (line.indexOf('💹') >= 0) c += ' price';
   else if (line.indexOf('✅') >= 0) c += ' inf';
   el.className = c;
   el.textContent = line;
