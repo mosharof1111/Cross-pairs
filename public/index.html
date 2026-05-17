@@ -38,32 +38,39 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:800px;ma
 .prog{height:100%;border-radius:2px;}
 .prog.ok{background:linear-gradient(90deg,var(--green),var(--cyan));}
 .prog.warn{background:linear-gradient(90deg,var(--amber),var(--red));}
-.price-row{display:flex;gap:8px;margin-bottom:14px;}
-.pcell{flex:1;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:4px;padding:10px 12px;}
-.pcell label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:5px;}
-.pcell .pval{font-size:24px;font-weight:700;}
-.pcell .pval.up{color:var(--green);}
-.pcell .pval.dn{color:var(--red);}
-.pcell .pval.btc{color:var(--amber);}
-.oracle-box{background:rgba(0,207,255,0.04);border:1px solid rgba(0,207,255,0.25);border-radius:5px;padding:12px;margin-bottom:14px;}
-.oracle-box h4{font-size:9px;color:var(--cyan);font-weight:700;letter-spacing:1.5px;margin-bottom:10px;display:flex;justify-content:space-between;}
-.ogrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px;}
-.og label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:3px;}
-.og value{display:block;font-size:14px;font-weight:700;}
-.signal{padding:8px 12px;border-radius:4px;font-size:11px;font-weight:700;text-align:center;letter-spacing:.5px;}
+/* Price sources row */
+.src-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;}
+.src-cell{background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:4px;padding:8px 10px;}
+.src-cell.binance{border-color:rgba(255,179,0,0.4);}
+.src-cell.chainlink{border-color:rgba(0,207,255,0.3);}
+.src-cell.polymarket{border-color:rgba(179,136,255,0.3);}
+.src-cell label{display:block;font-size:7px;color:var(--dim2);letter-spacing:1px;margin-bottom:4px;text-transform:uppercase;}
+.src-price{font-size:18px;font-weight:700;}
+.src-price.bnb{color:var(--amber);}
+.src-price.chl{color:var(--cyan);}
+.src-price.up{color:var(--green);}
+.src-price.dn{color:var(--red);}
+/* Oracle box */
+.oracle-box{background:rgba(0,207,255,0.03);border:1px solid rgba(0,207,255,0.2);border-radius:5px;padding:10px 12px;margin-bottom:12px;}
+.oracle-head{font-size:9px;color:var(--cyan);font-weight:700;letter-spacing:1.5px;margin-bottom:8px;display:flex;justify-content:space-between;}
+.ogrid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:8px;}
+.og label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:2px;}
+.og value{display:block;font-size:13px;font-weight:700;}
+.signal{padding:7px 10px;border-radius:4px;font-size:10px;font-weight:700;text-align:center;}
 .signal.none{background:rgba(255,255,255,0.03);border:1px solid var(--border);color:var(--dim2);}
 .signal.up{background:rgba(0,230,118,0.10);border:1px solid var(--green);color:var(--green);}
 .signal.down{background:rgba(255,61,90,0.10);border:1px solid var(--red);color:var(--red);}
 .signal.arb{background:rgba(179,136,255,0.12);border:1px solid var(--purple);color:var(--purple);}
+.signal.dual{background:rgba(0,230,118,0.15);border:2px solid var(--green);color:var(--green);font-size:11px;}
+/* Stats */
 .sbar{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--border);}
 .sbi{background:var(--panel2);padding:8px;text-align:center;}
 .sbi label{display:block;font-size:8px;color:var(--dim2);letter-spacing:1px;margin-bottom:3px;}
 .sbi value{display:block;font-size:15px;font-weight:700;}
 .tt{width:100%;border-collapse:collapse;}
-.tt th{padding:6px 10px;font-size:8px;color:var(--dim2);letter-spacing:1px;border-bottom:1px solid var(--border);text-align:left;}
-.tt td{padding:6px 10px;border-bottom:1px solid rgba(28,42,58,0.5);font-size:11px;}
+.tt th{padding:6px 8px;font-size:8px;color:var(--dim2);letter-spacing:1px;border-bottom:1px solid var(--border);text-align:left;}
+.tt td{padding:6px 8px;border-bottom:1px solid rgba(28,42,58,0.4);font-size:10px;}
 .tt tr:last-child td{border-bottom:none;}
-.tt tr:hover td{background:rgba(255,255,255,0.02);}
 .pos{color:var(--green);font-weight:700;}
 .neg{color:var(--red);font-weight:700;}
 .empty{padding:20px;text-align:center;color:var(--dim2);}
@@ -71,7 +78,9 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:800px;ma
 #logb::-webkit-scrollbar{width:3px;}
 #logb::-webkit-scrollbar-thumb{background:var(--border);}
 .ll{padding:2px 0;line-height:1.6;font-size:11px;color:var(--dim2);}
-.ll.oracle{color:var(--cyan);}
+.ll.binance{color:var(--amber);}
+.ll.chainlink{color:var(--cyan);}
+.ll.signal{color:var(--purple);}
 .ll.win{color:var(--green);}
 .ll.loss{color:var(--red);}
 .ll.inf{color:var(--text);}
@@ -81,7 +90,7 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:800px;ma
 <header>
   <div>
     <div class="brand">BTC <em>ORACLE</em> ARB</div>
-    <div class="sub">CHAINLINK BTC/USD → POLYMARKET 5M · $50/SIGNAL · DYNAMIC THRESHOLD · HOLD TO RESOLUTION</div>
+    <div class="sub">BINANCE (PRIMARY) + CHAINLINK (CONFIRM) · $50/SIGNAL · FINAL 30s · DYNAMIC THRESHOLD</div>
   </div>
   <div class="hstats">
     <div class="hstat"><label>BALANCE</label><div class="val" id="h-bal">$—</div></div>
@@ -92,7 +101,6 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:800px;ma
 </header>
 <main>
 
-  <!-- Window -->
   <div class="panel">
     <div class="ph"><h3>Live Window</h3><div class="badge" id="w-ts">—</div></div>
     <div class="wb">
@@ -105,19 +113,34 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:800px;ma
       </div>
       <div class="prog-wrap"><div class="prog ok" id="prog" style="width:0%"></div></div>
 
-      <!-- Prices -->
-      <div class="price-row">
-        <div class="pcell"><label>BTC/USD (Chainlink)</label><div class="pval btc" id="p-btc">$—</div></div>
-        <div class="pcell"><label>BTC ↑ UP token</label><div class="pval up" id="p-up">—</div></div>
-        <div class="pcell"><label>BTC ↓ DOWN token</label><div class="pval dn" id="p-dn">—</div></div>
+      <!-- Three price sources -->
+      <div class="src-row">
+        <div class="src-cell binance">
+          <label>🟡 Binance (primary)</label>
+          <div class="src-price bnb" id="p-binance">$—</div>
+        </div>
+        <div class="src-cell chainlink">
+          <label>⛓️ Chainlink (confirm)</label>
+          <div class="src-price chl" id="p-chainlink">$—</div>
+        </div>
+        <div class="src-cell polymarket" style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+          <div>
+            <label>↑ UP token</label>
+            <div class="src-price up" id="p-up">—</div>
+          </div>
+          <div>
+            <label>↓ DOWN token</label>
+            <div class="src-price dn" id="p-dn">—</div>
+          </div>
+        </div>
       </div>
 
-      <!-- Oracle box -->
+      <!-- Oracle status -->
       <div class="oracle-box">
-        <h4>
+        <div class="oracle-head">
           <span>⚡ ORACLE STATUS</span>
           <span id="oracle-time" style="color:var(--dim2);font-weight:400;font-size:9px">—</span>
-        </h4>
+        </div>
         <div class="ogrid">
           <div class="og"><label>WINDOW OPEN</label><value id="o-open" style="color:var(--dim2)">$—</value></div>
           <div class="og"><label>BTC NOW</label><value id="o-now" style="color:var(--amber)">$—</value></div>
@@ -125,7 +148,7 @@ main{padding:12px;display:flex;flex-direction:column;gap:10px;max-width:800px;ma
           <div class="og"><label>DIRECTION</label><value id="o-dir">—</value></div>
           <div class="og"><label>DYN THRESHOLD</label><value id="o-thr" style="color:var(--purple)">$—</value></div>
         </div>
-        <div class="signal none" id="o-signal">Waiting for Chainlink update…</div>
+        <div class="signal none" id="o-signal">Waiting for Binance price…</div>
       </div>
     </div>
   </div>
@@ -170,10 +193,10 @@ socket.on('connect',    function(){ document.getElementById('wsdot').classList.r
 socket.on('disconnect', function(){ document.getElementById('wsdot').classList.add('off'); });
 
 socket.on('prices', function(p) {
-  if (p.btcPrice) set('p-btc', '$' + p.btcPrice.toFixed(2));
-  if (p.btcPrice) set('o-now', '$' + p.btcPrice.toFixed(2));
-  if (p.upPrice)  set('p-up', p.upPrice > 0 ? p.upPrice.toFixed(3) : '—');
-  if (p.dnPrice)  set('p-dn', p.dnPrice > 0 ? p.dnPrice.toFixed(3) : '—');
+  if (p.binancePrice)   { set('p-binance',   '$' + p.binancePrice.toFixed(2)); set('o-now', '$' + p.binancePrice.toFixed(2)); }
+  if (p.chainlinkPrice && p.chainlinkPrice > 0) set('p-chainlink', '$' + p.chainlinkPrice.toFixed(2));
+  if (p.upPrice)        set('p-up', p.upPrice > 0 ? p.upPrice.toFixed(3) : '—');
+  if (p.dnPrice)        set('p-dn', p.dnPrice > 0 ? p.dnPrice.toFixed(3) : '—');
   set('w-upd', new Date().toLocaleTimeString());
   if (lastSnap) updateSignal(lastSnap.oracle, lastSnap.window);
 });
@@ -187,11 +210,10 @@ socket.on('snapshot', function(d) {
   var pe = document.getElementById('h-pnl');
   pe.textContent = (d.totalPnl >= 0 ? '+$' : '-$') + Math.abs(d.totalPnl).toFixed(2);
   pe.className = 'val' + (d.totalPnl > 0 ? ' pos' : d.totalPnl < 0 ? ' neg' : '');
-
   var cl = d.closedTrades;
-  var wins   = cl.filter(function(t){return (t.realizedPnl||0) > 0;}).length;
-  var losses = cl.filter(function(t){return (t.realizedPnl||0) < 0;}).length;
-  var profit = cl.filter(function(t){return (t.realizedPnl||0) > 0;}).reduce(function(s,t){return s+(t.realizedPnl||0);},0);
+  var wins   = cl.filter(function(t){return (t.realizedPnl||0)>0;}).length;
+  var losses = cl.filter(function(t){return (t.realizedPnl||0)<0;}).length;
+  var profit = cl.filter(function(t){return (t.realizedPnl||0)>0;}).reduce(function(s,t){return s+(t.realizedPnl||0);},0);
   set('st-sig',    cl.length);
   set('st-win',    wins);
   set('st-loss',   losses);
@@ -199,7 +221,6 @@ socket.on('snapshot', function(d) {
   var spnl = document.getElementById('st-pnl');
   spnl.textContent = (d.totalPnl >= 0 ? '+$' : '-$') + Math.abs(d.totalPnl).toFixed(2);
   spnl.style.color = d.totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
-
   if (d.oracle)  renderOracle(d.oracle);
   if (d.window)  renderWindow(d.window);
   if (d.oracle && d.window) updateSignal(d.oracle, d.window);
@@ -212,10 +233,11 @@ socket.on('log', function(line){ addLog(line); });
 function set(id, v){ var e = document.getElementById(id); if(e) e.textContent = v; }
 
 function renderOracle(o) {
-  set('o-open', o.windowOpen ? '$' + o.windowOpen.toFixed(2) : '$—');
-  set('o-now',  o.btcPrice > 0 ? '$' + o.btcPrice.toFixed(2) : '$—');
-  set('p-btc',  o.btcPrice > 0 ? '$' + o.btcPrice.toFixed(2) : '$—');
-  if (o.updatedAt) set('oracle-time', new Date(o.updatedAt * 1000).toLocaleTimeString());
+  if (o.binancePrice)   set('p-binance',   '$' + o.binancePrice.toFixed(2));
+  if (o.chainlinkPrice && o.chainlinkPrice > 0) set('p-chainlink', '$' + o.chainlinkPrice.toFixed(2));
+  if (o.confirmedPrice) { set('o-now', '$' + o.confirmedPrice.toFixed(2)); }
+  if (o.windowOpen)     set('o-open', '$' + o.windowOpen.toFixed(2));
+  if (o.updatedAt)      set('oracle-time', new Date(o.updatedAt * 1000).toLocaleTimeString());
   if (o.threshold !== undefined) set('o-thr', '$' + o.threshold.toFixed(2));
   var diffEl = document.getElementById('o-diff');
   if (o.diff !== null && o.diff !== undefined) {
@@ -223,7 +245,7 @@ function renderOracle(o) {
     diffEl.style.color = o.diff > 0 ? 'var(--green)' : o.diff < 0 ? 'var(--red)' : 'var(--text)';
   }
   var dirEl = document.getElementById('o-dir');
-  if (o.direction) {
+  if (o.direction && o.direction !== 'FLAT') {
     dirEl.textContent = o.direction === 'UP' ? '↑ UP' : '↓ DOWN';
     dirEl.style.color = o.direction === 'UP' ? 'var(--green)' : 'var(--red)';
   } else {
@@ -238,20 +260,24 @@ function updateSignal(o, w) {
   var rem     = w ? (w.remaining || 0) : 300;
   var absDiff = Math.abs(o.diff || 0);
   var thr     = o.threshold || 0;
+  var dir     = o.direction;
   if (w && w.oracleArbPlaced) {
-    sig.textContent = '🚀 ORACLE ARB PLACED — BTC ' + (o.direction||'') + ' $' + absDiff.toFixed(0) + ' from open — $50 on ' + (o.direction||'') + ' token';
+    sig.textContent = '🚀 ARB PLACED — BTC ' + dir + ' $' + absDiff.toFixed(0) + ' from open | $50 on ' + dir + ' token';
     sig.className = 'signal arb';
-  } else if (rem <= 90 && o.direction && thr > 0 && absDiff >= thr) {
-    sig.textContent = '⚡ SIGNAL ACTIVE: BTC ' + o.direction + ' $' + absDiff.toFixed(0) + ' ≥ $' + thr.toFixed(0) + ' threshold — buying ' + o.direction + ' token (' + rem + 's left)';
-    sig.className = 'signal ' + o.direction.toLowerCase();
-  } else if (rem <= 90 && o.direction) {
-    sig.textContent = 'In arb window (' + rem + 's) — BTC ' + o.direction + ' $' + absDiff.toFixed(0) + ' | need $' + thr.toFixed(0) + ' to trigger';
+  } else if (rem <= 30 && dir && dir !== 'FLAT' && thr > 0 && absDiff >= thr && o.chainlinkAgrees) {
+    sig.textContent = '🔥 DUAL SIGNAL: Binance + Chainlink both ' + dir + ' | $' + absDiff.toFixed(0) + ' move | BUYING NOW (' + rem + 's)';
+    sig.className = 'signal dual';
+  } else if (rem <= 30 && dir && dir !== 'FLAT' && thr > 0 && absDiff >= thr) {
+    sig.textContent = '⚡ BINANCE SIGNAL: BTC ' + dir + ' $' + absDiff.toFixed(0) + ' ≥ $' + thr.toFixed(0) + ' | Chainlink pending (' + rem + 's)';
+    sig.className = 'signal ' + dir.toLowerCase();
+  } else if (rem <= 30 && dir && dir !== 'FLAT') {
+    sig.textContent = 'In arb window (' + rem + 's) — BTC ' + dir + ' $' + absDiff.toFixed(0) + ' | need $' + thr.toFixed(0);
     sig.className = 'signal none';
-  } else if (o.direction && absDiff > 0) {
-    sig.textContent = 'BTC ' + o.direction + ' $' + absDiff.toFixed(0) + ' from open | threshold=$' + thr.toFixed(0) + ' | arb activates at 90s remaining';
+  } else if (dir && dir !== 'FLAT' && absDiff > 0) {
+    sig.textContent = 'BTC ' + dir + ' $' + absDiff.toFixed(0) + ' from open | threshold=$' + thr.toFixed(0) + ' | arb in final 30s';
     sig.className = 'signal none';
   } else {
-    sig.textContent = 'Waiting for Chainlink update…';
+    sig.textContent = o.binancePrice > 0 ? 'Monitoring BTC @ $' + o.binancePrice.toFixed(2) + '…' : 'Waiting for Binance price…';
     sig.className = 'signal none';
   }
 }
@@ -279,13 +305,14 @@ function renderOpen(trades) {
       '<td style="color:var(--cyan);font-size:9px">' + t.id + '</td>' +
       '<td class="' + (t.side==='UP'?'pos':'neg') + '">' + t.side + '</td>' +
       '<td>' + t.entryPrice.toFixed(3) + '</td>' +
-      '<td style="color:var(--dim2);font-size:9px">$' + t.oracleBtcOpen + ' → $' + t.oracleBtcClose + '</td>' +
+      '<td style="color:var(--dim2);font-size:9px">$' + (t.btcOpen||'?') + '→$' + (t.btcClose||'?') + '</td>' +
+      '<td style="color:' + (t.chainlinkConfirmed?'var(--green)':'var(--dim2)') + ';font-size:9px">' + (t.chainlinkConfirmed?'✅ dual':'Binance') + '</td>' +
       '<td>' + t.shares.toFixed(2) + '</td>' +
       '<td>$' + t.cost.toFixed(2) + '</td>' +
       '<td class="' + (pnl>=0?'pos':'neg') + '">' + (pnl>=0?'+':'') + '$' + pnl.toFixed(2) + '</td>' +
       '</tr>';
   }).join('');
-  el.innerHTML = '<table class="tt"><thead><tr><th>ID</th><th>SIDE</th><th>ENTRY</th><th>BTC MOVE</th><th>SHARES</th><th>COST</th><th>FLOAT</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  el.innerHTML = '<table class="tt"><thead><tr><th>ID</th><th>SIDE</th><th>ENTRY</th><th>BTC MOVE</th><th>SOURCE</th><th>SHARES</th><th>COST</th><th>FLOAT</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
 function renderClosed(trades) {
@@ -298,18 +325,21 @@ function renderClosed(trades) {
       '<td class="' + (t.side==='UP'?'pos':'neg') + '">' + t.side + '</td>' +
       '<td>' + t.entryPrice.toFixed(3) + '</td>' +
       '<td>' + (t.exitPrice ? t.exitPrice.toFixed(3) : '—') + '</td>' +
-      '<td style="color:var(--dim2);font-size:9px">$' + (t.diff||'?') + ' / $' + (t.threshold||'?') + '</td>' +
+      '<td style="color:var(--dim2);font-size:9px">$' + (t.diff||'?') + '/$' + (t.threshold||'?') + '</td>' +
+      '<td style="color:' + (t.chainlinkConfirmed?'var(--green)':'var(--dim2)') + ';font-size:9px">' + (t.chainlinkConfirmed?'✅':'—') + '</td>' +
       '<td>$' + t.cost.toFixed(2) + '</td>' +
       '<td class="' + (pnl>=0?'pos':'neg') + '">' + (pnl>=0?'+':'') + '$' + pnl.toFixed(2) + '</td>' +
       '</tr>';
   }).join('');
-  el.innerHTML = '<table class="tt"><thead><tr><th>ID</th><th>SIDE</th><th>ENTRY</th><th>EXIT</th><th>DIFF/THR</th><th>COST</th><th>P&L</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  el.innerHTML = '<table class="tt"><thead><tr><th>ID</th><th>SIDE</th><th>ENTRY</th><th>EXIT</th><th>DIFF/THR</th><th>DUAL</th><th>COST</th><th>P&L</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
 function addLog(line) {
   var el = document.createElement('div');
   var c = 'll';
-  if (line.indexOf('ORACLE') >= 0 || line.indexOf('Chainlink') >= 0 || line.indexOf('🎯') >= 0 || line.indexOf('⚡') >= 0 || line.indexOf('🚀') >= 0) c += ' oracle';
+  if (line.indexOf('Binance') >= 0 || line.indexOf('💹') >= 0) c += ' binance';
+  else if (line.indexOf('Chainlink') >= 0 || line.indexOf('⛓️') >= 0) c += ' chainlink';
+  else if (line.indexOf('SIGNAL') >= 0 || line.indexOf('🎯') >= 0 || line.indexOf('🚀') >= 0 || line.indexOf('🔥') >= 0) c += ' signal';
   else if (line.indexOf('🟢') >= 0) c += ' win';
   else if (line.indexOf('🔴') >= 0) c += ' loss';
   else if (line.indexOf('✅') >= 0 || line.indexOf('📌') >= 0) c += ' inf';
