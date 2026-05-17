@@ -21,7 +21,7 @@ const CHAINLINK_ABI = [
 const WINDOW_SIZE        = 300;
 const ORACLE_ARB_AMOUNT  = 50;
 const ORACLE_ARB_TRIGGER = 30;
-const ORACLE_MIN_EDGE    = 0.35;
+const ORACLE_MIN_EDGE    = 0.90;
 const STARTING_BALANCE   = 1000;
 
 let state = { balance: STARTING_BALANCE, openTrades: [], closedTrades: [], totalPnl: 0 };
