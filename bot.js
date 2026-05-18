@@ -24,27 +24,28 @@ const TOKEN_MAX        = 0.90;
 const MOVE_MULTIPLIER  = 0.5;
 const TREND_BUCKETS    = 3;
 const STARTING_BALANCE = 2000;
-
-const STOP_LOSS      = 0.03;   // exit if token drops to 0.03
-const TAKE_PROFIT    = 0.99;   // exit if token reaches 0.99
-const CRYPTO_FEE_RATE = 0.018; // 1.8% peak rate for crypto markets
-
+const STOP_LOSS        = 0.03;
+const TAKE_PROFIT      = 0.99;
+const CRYPTO_FEE_RATE  = 0.018;
 const LAST_MOVE_WINDOW = { 30: 20, 90: 60 };
 
 let state = {
-  balance: STARTING_BALANCE,
+  balance:    STARTING_BALANCE,
   openTrades: [],
   closedTrades: [],
-  totalPnl: 0,
-  pnl5m:    0,
-  pnl15m:   0,
-  totalFees: 0,
+  totalPnl:   0,
+  pnl5m:      0,
+  pnl15m:     0,
+  totalFees:  0,
 };
 
-const priceBook   = {};
-const marketCache = {};
-const windowState = {};
-const firedBlocks = {};
+const priceBook    = {};
+const marketCache  = {};
+const windowState  = {};
+
+// firedBlocks — key = `${marketId}:${blockNumber}`, value = true
+// Set SYNCHRONOUSLY before any async work to prevent double-fire
+const firedBlocks  = {};
 
 const priceHistory   = { BTC: [], ETH: [] };
 const binancePrices  = { BTC: 0, ETH: 0 };
@@ -54,9 +55,7 @@ const binanceLastPx  = { BTC: 0, ETH: 0 };
 let emitFn = () => {};
 let logFn  = () => {};
 
-// ── Fee calculation ───────────────────────────────────────────────────────────
 function calcFee(shares, price) {
-  // fee = shares × 0.018 × price × (1 - price)
   return +(shares * CRYPTO_FEE_RATE * price * (1 - price)).toFixed(4);
 }
 
@@ -133,10 +132,10 @@ function connectBinance(asset, url) {
 
 // ── Signal logic ──────────────────────────────────────────────────────────────
 function getAverageMove(asset, blockSize, historyWindow) {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const hist   = priceHistory[asset].filter(h => h.ts >= nowSec - historyWindow);
-  const moves  = [];
+  const nowSec     = Math.floor(Date.now() / 1000);
+  const hist       = priceHistory[asset].filter(h => h.ts >= nowSec - historyWindow);
   const numBuckets = Math.floor(historyWindow / blockSize);
+  const moves      = [];
   for (let i = 0; i < numBuckets; i++) {
     const bucketEnd   = nowSec - i * blockSize;
     const bucketStart = bucketEnd - blockSize;
@@ -179,31 +178,52 @@ function isTrending(asset, blockSize) {
 function checkSignalsForAsset(asset) {
   for (const [marketId, cfg] of Object.entries(MARKETS)) {
     if (cfg.asset !== asset) continue;
+
     const cws      = currentWindowStart(cfg.windowSize);
     const cacheKey = `${marketId}:${cws}`;
     const w        = marketCache[cacheKey];
     if (!w) continue;
     if (priceHistory[asset].length < 10) continue;
+
     const blockNum = currentBlockNumber(cfg.blockSize);
     const blockKey = `${marketId}:${blockNum}`;
+
+    // ── ATOMIC block guard ────────────────────────────────────────────────────
+    // Check AND set in the same synchronous operation — no gap for double fire
     if (firedBlocks[blockKey]) continue;
+    firedBlocks[blockKey] = true; // claim this block IMMEDIATELY before any checks
+
     const avg      = getAverageMove(asset, cfg.blockSize, cfg.historyWindow);
-    if (avg === 0) continue;
     const lookback = LAST_MOVE_WINDOW[cfg.blockSize] || Math.floor(cfg.blockSize * 0.66);
     const last     = getRecentMove(asset, lookback);
     const required = avg * MOVE_MULTIPLIER;
-    if (!last.direction || last.absChange === 0) continue;
-    if (last.absChange <= required) continue;
-    if (isTrending(asset, cfg.blockSize)) {
-      const trendKey = `${blockKey}:trend`;
-      if (!firedBlocks[trendKey]) { log(`📊 [${marketId}] TRENDING — skip`); firedBlocks[trendKey] = true; }
+
+    // If conditions not met — release the block so it can fire later this block
+    if (!last.direction || last.absChange === 0 || avg === 0 || last.absChange <= required) {
+      firedBlocks[blockKey] = false; // release — conditions not met
       continue;
     }
+
+    if (isTrending(asset, cfg.blockSize)) {
+      firedBlocks[blockKey] = false; // release — trending
+      const trendKey = `${blockKey}:trendlog`;
+      if (!firedBlocks[trendKey]) {
+        log(`📊 [${marketId}] TRENDING — skip`);
+        firedBlocks[trendKey] = true;
+      }
+      continue;
+    }
+
     const reversed   = last.direction === 'UP' ? 'DOWN' : 'UP';
     const token      = reversed === 'UP' ? w.upToken : w.dnToken;
     const tokenPrice = getPrice(token);
-    if (tokenPrice < TOKEN_MIN || tokenPrice > TOKEN_MAX) continue;
-    firedBlocks[blockKey] = true;
+
+    if (tokenPrice < TOKEN_MIN || tokenPrice > TOKEN_MAX) {
+      firedBlocks[blockKey] = false; // release — token out of range
+      continue;
+    }
+
+    // All checks passed — block stays claimed, fire the trade
     const nowSec  = Math.floor(Date.now() / 1000);
     const elapsed = nowSec - (blockNum * cfg.blockSize);
     log(`📊 [${marketId}] ${last.direction} $${last.absChange.toFixed(2)} > 0.5x=$${required.toFixed(2)} | token=${tokenPrice.toFixed(3)} | ${elapsed}s into block ✅`);
@@ -212,20 +232,22 @@ function checkSignalsForAsset(asset) {
 }
 
 function placeTrade(marketId, cfg, w, cws, direction, move, avg, required, tokenPrice, elapsedInBlock) {
-  const rawCost = +(tokenPrice * cfg.shares).toFixed(2);
-  const fee     = calcFee(cfg.shares, tokenPrice);
+  const rawCost   = +(tokenPrice * cfg.shares).toFixed(2);
+  const fee       = calcFee(cfg.shares, tokenPrice);
   const totalCost = +(rawCost + fee).toFixed(2);
   if (state.balance < totalCost) { log(`💸 Low balance for ${marketId}`); return; }
-  const id = tradeId();
-  state.balance  -= totalCost;
-  state.totalFees += fee;
+  const id    = tradeId();
   const is15m = cfg.windowSize === 900;
+  state.balance   -= totalCost;
+  state.totalFees += fee;
   const trade = {
     id, marketId, windowStart: cws, windowSize: cfg.windowSize,
     asset: cfg.asset, side: direction, type: 'REVERSION',
     entryPrice: tokenPrice, shares: cfg.shares,
     rawCost, fee, cost: totalCost,
     sl: STOP_LOSS, tp: TAKE_PROFIT,
+    upToken: w.upToken,
+    dnToken: w.dnToken,
     btcMove: +move.toFixed(2), avgMove: +avg.toFixed(2),
     required: +required.toFixed(2),
     assetPriceAtEntry: +binancePrices[cfg.asset].toFixed(2),
@@ -239,41 +261,32 @@ function placeTrade(marketId, cfg, w, cws, direction, move, avg, required, token
   if (!windowState[wstKey]) windowState[wstKey] = { trades: 0 };
   windowState[wstKey].trades++;
   saveState();
-  log(`🚀 [${marketId}] REVERSION ${direction} [${id}] token=${tokenPrice.toFixed(3)} shares=${cfg.shares} cost=$${rawCost} fee=$${fee} total=$${totalCost} | SL=${STOP_LOSS} TP=${TAKE_PROFIT} | bal=$${state.balance.toFixed(2)}`);
+  log(`🚀 [${marketId}] REVERSION ${direction} [${id}] token=${tokenPrice.toFixed(3)} shares=${cfg.shares} cost=$${rawCost} fee=$${fee} total=$${totalCost} | SL=${STOP_LOSS} TP=${TAKE_PROFIT} | ${elapsedInBlock}s into block | bal=$${state.balance.toFixed(2)}`);
   emitFn('snapshot', buildDashboardSnapshot());
 }
 
-// ── TP/SL check on every price poll ──────────────────────────────────────────
+// ── TP/SL using token IDs stored on trade ────────────────────────────────────
 function checkTPSL() {
   const toClose = [];
   for (const t of state.openTrades) {
-    const cfg      = MARKETS[t.marketId];
-    const cacheKey = `${t.marketId}:${t.windowStart}`;
-    const w        = marketCache[cacheKey];
-    if (!w || !cfg) continue;
-    const tokenId    = t.side === 'UP' ? w.upToken : w.dnToken;
-    const curPrice   = getPrice(tokenId);
+    if (!t.upToken || !t.dnToken) continue;
+    const tokenId  = t.side === 'UP' ? t.upToken : t.dnToken;
+    const curPrice = getPrice(tokenId);
     if (curPrice <= 0) continue;
     t.floatingPnl = +((curPrice - t.entryPrice) * t.shares).toFixed(4);
-    const ot = state.openTrades.find(x => x.id === t.id);
-    if (ot) ot.floatingPnl = t.floatingPnl;
-    if (curPrice >= TAKE_PROFIT) {
-      toClose.push({ trade: t, exitPrice: curPrice, reason: 'TP' });
-    } else if (curPrice <= STOP_LOSS) {
-      toClose.push({ trade: t, exitPrice: curPrice, reason: 'SL' });
-    }
+    if      (curPrice >= TAKE_PROFIT) toClose.push({ trade: t, exitPrice: curPrice, reason: 'TP' });
+    else if (curPrice <= STOP_LOSS)   toClose.push({ trade: t, exitPrice: curPrice, reason: 'SL' });
   }
   for (const { trade: t, exitPrice, reason } of toClose) {
     const proceeds  = +(exitPrice * t.shares).toFixed(2);
-    const pnl       = +(proceeds - t.cost).toFixed(4); // cost already includes entry fee
+    const pnl       = +(proceeds - t.cost).toFixed(4);
     state.balance  += proceeds;
     state.totalPnl += pnl;
     if (t.timeframe === '15m') state.pnl15m += pnl;
     else                       state.pnl5m  += pnl;
     state.openTrades = state.openTrades.filter(x => x.id !== t.id);
     state.closedTrades.push({
-      ...t, exitPrice, proceeds,
-      realizedPnl: pnl,
+      ...t, exitPrice, proceeds, realizedPnl: pnl,
       closedAt: new Date().toISOString(), exitReason: reason,
     });
     saveState();
@@ -385,9 +398,12 @@ async function pollPrices() {
     const cws      = currentWindowStart(cfg.windowSize);
     const cacheKey = `${marketId}:${cws}`;
     const w        = marketCache[cacheKey];
-    if (!w) continue;
-    tokens.add(w.upToken);
-    tokens.add(w.dnToken);
+    if (w) { tokens.add(w.upToken); tokens.add(w.dnToken); }
+  }
+  // Also poll tokens from open trades that may be from old windows
+  for (const t of state.openTrades) {
+    if (t.upToken) tokens.add(t.upToken);
+    if (t.dnToken) tokens.add(t.dnToken);
   }
   await Promise.all([...tokens].map(async tid => {
     try {
@@ -402,6 +418,7 @@ async function pollPrices() {
   }));
 }
 
+// ── Resolution — uses token IDs from trades, not marketCache ─────────────────
 async function checkResolution() {
   const nowSec = Math.floor(Date.now() / 1000);
   for (const [key, wst] of Object.entries(windowState)) {
@@ -411,23 +428,39 @@ async function checkResolution() {
     const cfg = MARKETS[marketId];
     if (!cfg) continue;
     if (nowSec < ts + cfg.windowSize + 30) continue;
-    const w = marketCache[key];
-    if (!w) { wst.resolved = true; continue; }
-    log(`⏰ [${marketId}] Resolving ts=${ts}…`);
-    await Promise.all([w.upToken, w.dnToken].map(async tid => {
+
+    const tradesInWindow = state.openTrades.filter(t => t.marketId === marketId && t.windowStart === ts);
+    if (!tradesInWindow.length) { wst.resolved = true; continue; }
+
+    log(`⏰ [${marketId}] Resolving ts=${ts} (${tradesInWindow.length} trades)…`);
+
+    // Collect all token IDs from the trades themselves
+    const allTokens = new Set();
+    for (const t of tradesInWindow) {
+      if (t.upToken) allTokens.add(t.upToken);
+      if (t.dnToken) allTokens.add(t.dnToken);
+    }
+
+    // Fetch resolution prices
+    const resolvedPrices = {};
+    await Promise.all([...allTokens].map(async tid => {
       try {
         const r = await fetch(`${CLOB_REST}/price?token_id=${tid}&side=BUY`, { timeout: 4000 });
         const p = parseFloat((await r.json()).price ?? 0) || 0;
-        if (p > 0) priceBook[tid] = { bid: p - 0.005, ask: p + 0.005 };
+        if (p > 0) resolvedPrices[tid] = p;
       } catch (_) {}
     }));
-    const upPrice = getPrice(w.upToken);
-    const dnPrice = getPrice(w.dnToken);
-    log(`   [${marketId}] Resolved: ↑=${upPrice.toFixed(3)} ↓=${dnPrice.toFixed(3)}`);
-    const tradesInWindow = state.openTrades.filter(t => t.marketId === marketId && t.windowStart === ts);
+
+    log(`   [${marketId}] Resolved prices: UP=${resolvedPrices[tradesInWindow[0]?.upToken]?.toFixed(3)||'?'} DN=${resolvedPrices[tradesInWindow[0]?.dnToken]?.toFixed(3)||'?'}`);
+
     let windowPnl = 0;
     for (const t of tradesInWindow) {
-      const rp  = t.side === 'UP' ? upPrice : dnPrice;
+      const tokenId = t.side === 'UP' ? t.upToken : t.dnToken;
+      const rp      = resolvedPrices[tokenId];
+      if (!rp || rp <= 0) {
+        log(`⚠️  [${marketId}] No price for [${t.id}] — skipping`);
+        continue;
+      }
       const pro = +(rp * t.shares).toFixed(2);
       const pnl = +(pro - t.cost).toFixed(4);
       windowPnl      += pnl;
@@ -436,8 +469,7 @@ async function checkResolution() {
       if (t.timeframe === '15m') state.pnl15m += pnl;
       else                       state.pnl5m  += pnl;
       state.closedTrades.push({
-        ...t, exitPrice: rp, proceeds: pro,
-        realizedPnl: pnl,
+        ...t, exitPrice: rp, proceeds: pro, realizedPnl: pnl,
         closedAt: new Date().toISOString(), exitReason: 'RESOLVED',
       });
       log(`${pnl >= 0 ? '🟢' : '🔴'} [${marketId}] RESOLVED ${t.side} [${t.id}] entry=${t.entryPrice.toFixed(3)} exit=${rp.toFixed(3)} fee=$${t.fee} pnl=$${pnl.toFixed(2)}`);
@@ -452,10 +484,8 @@ async function checkResolution() {
 
 function updateFloating() {
   for (const t of state.openTrades) {
-    const cacheKey = `${t.marketId}:${t.windowStart}`;
-    const w        = marketCache[cacheKey];
-    if (!w) continue;
-    const tokenId = t.side === 'UP' ? w.upToken : w.dnToken;
+    if (!t.upToken || !t.dnToken) continue;
+    const tokenId = t.side === 'UP' ? t.upToken : t.dnToken;
     const p = getPrice(tokenId);
     if (p > 0) t.floatingPnl = +((p - t.entryPrice) * t.shares).toFixed(4);
   }
@@ -479,24 +509,24 @@ function buildSignalSnapshot(marketId) {
   const blockKey = `${marketId}:${blockNum}`;
   return {
     marketId,
-    asset:       cfg.asset,
-    timeframe:   cfg.windowSize === 900 ? '15m' : '5m',
-    windowStart: cws,
-    elapsed:     nowSec - cws,
-    remaining:   Math.max(0, cfg.windowSize - (nowSec - cws)),
-    windowSize:  cfg.windowSize,
-    blockSize:   cfg.blockSize,
+    asset:        cfg.asset,
+    timeframe:    cfg.windowSize === 900 ? '15m' : '5m',
+    windowStart:  cws,
+    elapsed:      nowSec - cws,
+    remaining:    Math.max(0, cfg.windowSize - (nowSec - cws)),
+    windowSize:   cfg.windowSize,
+    blockSize:    cfg.blockSize,
     blockElapsed: nowSec - (blockNum * cfg.blockSize),
-    blockFired:  !!firedBlocks[blockKey],
-    assetPrice:  +binancePrices[cfg.asset].toFixed(2),
-    upPrice:     +upPrice.toFixed(3),
-    dnPrice:     +dnPrice.toFixed(3),
-    avg:         +avg.toFixed(2),
-    required:    +required.toFixed(2),
-    lastMove:    +(last.absChange||0).toFixed(2),
-    lastDir:     last.direction,
-    reversedDir: last.direction ? (last.direction === 'UP' ? 'DOWN' : 'UP') : null,
-    isSignal:    last.absChange > required && avg > 0 && !trending && !firedBlocks[blockKey],
+    blockFired:   !!firedBlocks[blockKey],
+    assetPrice:   +binancePrices[cfg.asset].toFixed(2),
+    upPrice:      +upPrice.toFixed(3),
+    dnPrice:      +dnPrice.toFixed(3),
+    avg:          +avg.toFixed(2),
+    required:     +required.toFixed(2),
+    lastMove:     +(last.absChange||0).toFixed(2),
+    lastDir:      last.direction,
+    reversedDir:  last.direction ? (last.direction === 'UP' ? 'DOWN' : 'UP') : null,
+    isSignal:     last.absChange > required && avg > 0 && !trending && !firedBlocks[blockKey],
     trending,
     historyCount: priceHistory[cfg.asset].length,
     tradesThisWindow: wst.trades || 0,
@@ -528,9 +558,9 @@ function prune() {
     const cfg = MARKETS[marketId];
     if (cfg && Number(tsStr) < nowSec - cfg.windowSize * 3) delete marketCache[key];
   }
-  const cutoff = Math.floor(nowSec / 30) - 240;
+  const cutoff = Math.floor(nowSec / 30) - 480;
   for (const key of Object.keys(firedBlocks)) {
-    const parts = key.split(':');
+    const parts    = key.split(':');
     const blockNum = Number(parts[parts.length - 1]);
     if (!isNaN(blockNum) && blockNum < cutoff) delete firedBlocks[key];
   }
@@ -551,8 +581,8 @@ async function tick() {
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
-  log('🚀 Multi-Market Reversion Bot — realistic demo with fees + SL/TP');
-  log(`   SL=${STOP_LOSS} | TP=${TAKE_PROFIT} | fee=1.8% × p × (1-p)`);
+  log('🚀 Multi-Market Reversion Bot — intra-block | single fire | fees + SL/TP');
+  log(`   SL=${STOP_LOSS} | TP=${TAKE_PROFIT} | fee=1.8%×p×(1-p) | balance=$${STARTING_BALANCE}`);
   log('   5m: 30s blocks | 15min history | 50 shares');
   log('   15m: 90s blocks | 45min history | 50 shares');
   loadState();
