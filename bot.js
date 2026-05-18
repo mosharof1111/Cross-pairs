@@ -25,10 +25,10 @@ const MARKETS = {
 
 const TOKEN_MIN        = 0.10;
 const TOKEN_MAX        = 0.90;
-const MOVE_MULTIPLIER  = 0.5;
+const MOVE_MULTIPLIER  = 0.6;
 const TREND_BUCKETS    = 3;
-const STARTING_BALANCE = 2000;
-const STOP_LOSS        = 0.03;
+const STARTING_BALANCE = 4000;
+const STOP_LOSS        = 0.00;
 const TAKE_PROFIT      = 0.99;
 const CRYPTO_FEE_RATE  = 0.018;
 
