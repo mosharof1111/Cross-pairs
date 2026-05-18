@@ -51,6 +51,10 @@ function calcFee(shares, price) {
   return +(shares * CRYPTO_FEE_RATE * price * (1 - price)).toFixed(4);
 }
 
+// ── Safe arithmetic helpers ───────────────────────────────────────────────────
+function addMoney(a, b)  { return +((a * 100 + b * 100) / 100).toFixed(2); }
+function subMoney(a, b)  { return +((a * 100 - b * 100) / 100).toFixed(2); }
+
 function loadState() {
   try {
     if (fs.existsSync(TRADES_FILE)) {
@@ -58,7 +62,7 @@ function loadState() {
       state = { ...state, ...raw };
       if (state.openTrades.length > 0) {
         log(`♻️  Refunding ${state.openTrades.length} open trade(s)`);
-        for (const t of state.openTrades) state.balance += t.cost;
+        for (const t of state.openTrades) state.balance = addMoney(state.balance, t.cost);
         state.openTrades = [];
         saveState();
       }
@@ -215,52 +219,30 @@ function checkSignals() {
     log(`📊 [${marketId}] avg=$${avg.toFixed(2)} last=${last.direction} $${last.absChange.toFixed(2)} > 0.5x=$${required.toFixed(2)} | token=${tokenPrice.toFixed(3)} ✅ SIGNAL ${newDirection}`);
 
     // Step 1 — open new position first
-    placeTrade(marketId, cfg, w, cws, newDirection, last.absChange, avg, required, tokenPrice);
+    const opened = placeTrade(marketId, cfg, w, cws, newDirection, last.absChange, avg, required, tokenPrice);
 
-    // Step 2 — close any existing positions in OPPOSITE direction
-    closeOppositeTrades(marketId, newDirection, w);
+    // Step 2 — close opposite positions only if new trade opened successfully
+    if (opened) closeOppositeTrades(marketId, newDirection);
   }
 }
 
-// ── Close all open trades for a market that are opposite direction ────────────
-function closeOppositeTrades(marketId, newDirection, w) {
-  const oppositeDir = newDirection === 'UP' ? 'DOWN' : 'UP';
-  const toClose = state.openTrades.filter(
-    t => t.marketId === marketId && t.side === oppositeDir
-  );
-  if (!toClose.length) return;
-  log(`🔄 [${marketId}] Closing ${toClose.length} ${oppositeDir} position(s) — new direction is ${newDirection}`);
-  for (const t of toClose) {
-    const tokenId  = t.side === 'UP' ? t.upToken : t.dnToken;
-    const curPrice = getPrice(tokenId);
-    if (curPrice <= 0) {
-      log(`⚠️  [${marketId}] No price to close [${t.id}] — leaving open`);
-      continue;
-    }
-    const proceeds  = +(curPrice * t.shares).toFixed(2);
-    const pnl       = +(proceeds - t.cost).toFixed(4);
-    state.balance  += proceeds;
-    state.totalPnl += pnl;
-    state.pnl5m    += pnl;
-    state.openTrades = state.openTrades.filter(x => x.id !== t.id);
-    state.closedTrades.push({
-      ...t, exitPrice: curPrice, proceeds, realizedPnl: pnl,
-      closedAt: new Date().toISOString(), exitReason: 'FLIPPED',
-    });
-    log(`${pnl >= 0 ? '🟢' : '🔴'} [${marketId}] FLIPPED ${t.side} [${t.id}] entry=${t.entryPrice.toFixed(3)} exit=${curPrice.toFixed(3)} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
-  }
-  saveState();
-  emitFn('snapshot', buildDashboardSnapshot());
-}
-
+// ── Place trade — returns true if successful ──────────────────────────────────
 function placeTrade(marketId, cfg, w, cws, direction, move, avg, required, tokenPrice) {
   const rawCost   = +(tokenPrice * cfg.shares).toFixed(2);
   const fee       = calcFee(cfg.shares, tokenPrice);
   const totalCost = +(rawCost + fee).toFixed(2);
-  if (state.balance < totalCost) { log(`💸 Low balance for ${marketId}`); return; }
+
+  if (state.balance < totalCost) {
+    log(`💸 [${marketId}] Low balance $${state.balance.toFixed(2)} need $${totalCost}`);
+    return false;
+  }
+
   const id = tradeId();
-  state.balance   -= totalCost;
-  state.totalFees += fee;
+
+  // ── Update state FIRST before any logging ────────────────────────────────
+  state.balance   = subMoney(state.balance, totalCost);
+  state.totalFees = +(state.totalFees + fee).toFixed(4);
+
   const trade = {
     id, marketId, windowStart: cws, windowSize: cfg.windowSize,
     asset: cfg.asset, side: direction, type: 'REVERSION',
@@ -276,12 +258,66 @@ function placeTrade(marketId, cfg, w, cws, direction, move, avg, required, token
     timeframe: '5m',
     exitReason: null,
   };
+
   state.openTrades.push(trade);
   const wstKey = `${marketId}:${cws}`;
   if (!windowState[wstKey]) windowState[wstKey] = { trades: 0 };
   windowState[wstKey].trades++;
   saveState();
+
+  // ── Log AFTER state is saved ──────────────────────────────────────────────
   log(`🚀 [${marketId}] ${direction} [${id}] token=${tokenPrice.toFixed(3)} shares=${cfg.shares} cost=$${rawCost} fee=$${fee} total=$${totalCost} | TP=${TAKE_PROFIT} | bal=$${state.balance.toFixed(2)}`);
+  emitFn('snapshot', buildDashboardSnapshot());
+  return true;
+}
+
+// ── Close all open trades for this market that are opposite direction ──────────
+function closeOppositeTrades(marketId, newDirection) {
+  const oppositeDir = newDirection === 'UP' ? 'DOWN' : 'UP';
+  const toClose = state.openTrades.filter(
+    t => t.marketId === marketId && t.side === oppositeDir
+  );
+  if (!toClose.length) return;
+
+  log(`🔄 [${marketId}] Closing ${toClose.length} ${oppositeDir} position(s) — flipping to ${newDirection}`);
+
+  const closedNow = [];
+
+  for (const t of toClose) {
+    const tokenId  = t.side === 'UP' ? t.upToken : t.dnToken;
+    const curPrice = getPrice(tokenId);
+    if (curPrice <= 0) {
+      log(`⚠️  [${marketId}] No price for [${t.id}] — cannot close`);
+      continue;
+    }
+    const proceeds = +(curPrice * t.shares).toFixed(2);
+    const pnl      = +(proceeds - t.cost).toFixed(4);
+
+    // ── Update state FIRST before any logging ────────────────────────────
+    state.balance   = addMoney(state.balance, proceeds);
+    state.totalPnl  = +(state.totalPnl + pnl).toFixed(4);
+    state.pnl5m     = +(state.pnl5m + pnl).toFixed(4);
+
+    const closedTrade = {
+      ...t, exitPrice: curPrice, proceeds, realizedPnl: pnl,
+      closedAt: new Date().toISOString(), exitReason: 'FLIPPED',
+    };
+    state.closedTrades.push(closedTrade);
+    closedNow.push({ t, curPrice, pnl });
+  }
+
+  // Remove all closed trades from openTrades at once
+  const closedIds = new Set(closedNow.map(x => x.t.id));
+  state.openTrades = state.openTrades.filter(t => !closedIds.has(t.id));
+
+  // Save ONCE after all flips processed
+  saveState();
+
+  // Log AFTER all state updates
+  for (const { t, curPrice, pnl } of closedNow) {
+    log(`${pnl >= 0 ? '🟢' : '🔴'} [${marketId}] FLIPPED ${t.side} [${t.id}] entry=${t.entryPrice.toFixed(3)} exit=${curPrice.toFixed(3)} fee=$${t.fee} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
+  }
+
   emitFn('snapshot', buildDashboardSnapshot());
 }
 
@@ -293,21 +329,24 @@ function checkTP() {
     const tokenId  = t.side === 'UP' ? t.upToken : t.dnToken;
     const curPrice = getPrice(tokenId);
     if (curPrice <= 0) continue;
-    t.floatingPnl = +((curPrice - t.entryPrice) * t.shares).toFixed(4);
+    t.floatingPnl = +(( curPrice - t.entryPrice) * t.shares).toFixed(4);
     if (curPrice >= TAKE_PROFIT) toClose.push({ trade: t, exitPrice: curPrice });
   }
   for (const { trade: t, exitPrice } of toClose) {
-    const proceeds  = +(exitPrice * t.shares).toFixed(2);
-    const pnl       = +(proceeds - t.cost).toFixed(4);
-    state.balance  += proceeds;
-    state.totalPnl += pnl;
-    state.pnl5m    += pnl;
+    const proceeds = +(exitPrice * t.shares).toFixed(2);
+    const pnl      = +(proceeds - t.cost).toFixed(4);
+
+    // Update state FIRST
+    state.balance   = addMoney(state.balance, proceeds);
+    state.totalPnl  = +(state.totalPnl + pnl).toFixed(4);
+    state.pnl5m     = +(state.pnl5m + pnl).toFixed(4);
     state.openTrades = state.openTrades.filter(x => x.id !== t.id);
     state.closedTrades.push({
       ...t, exitPrice, proceeds, realizedPnl: pnl,
       closedAt: new Date().toISOString(), exitReason: 'TP',
     });
     saveState();
+
     log(`🟢 [${t.marketId}] TP ${t.side} [${t.id}] entry=${t.entryPrice.toFixed(3)} exit=${exitPrice.toFixed(3)} fee=$${t.fee} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
     emitFn('snapshot', buildDashboardSnapshot());
   }
@@ -468,15 +507,18 @@ async function checkResolution() {
       if (!rp || rp <= 0) { log(`⚠️  [${marketId}] No price for [${t.id}]`); continue; }
       const pro = +(rp * t.shares).toFixed(2);
       const pnl = +(pro - t.cost).toFixed(4);
-      windowPnl      += pnl;
-      state.balance  += pro;
-      state.totalPnl += pnl;
-      state.pnl5m    += pnl;
+
+      // Update state FIRST
+      state.balance   = addMoney(state.balance, pro);
+      state.totalPnl  = +(state.totalPnl + pnl).toFixed(4);
+      state.pnl5m     = +(state.pnl5m + pnl).toFixed(4);
+      windowPnl += pnl;
+
       state.closedTrades.push({
         ...t, exitPrice: rp, proceeds: pro, realizedPnl: pnl,
         closedAt: new Date().toISOString(), exitReason: 'RESOLVED',
       });
-      log(`${pnl >= 0 ? '🟢' : '🔴'} [${marketId}] RESOLVED ${t.side} [${t.id}] entry=${t.entryPrice.toFixed(3)} exit=${rp.toFixed(3)} fee=$${t.fee} pnl=$${pnl.toFixed(2)}`);
+      log(`${pnl >= 0 ? '🟢' : '🔴'} [${marketId}] RESOLVED ${t.side} [${t.id}] entry=${t.entryPrice.toFixed(3)} exit=${rp.toFixed(3)} fee=$${t.fee} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
     }
     state.openTrades = state.openTrades.filter(t => !(t.marketId === marketId && t.windowStart === ts));
     wst.resolved = true;
@@ -509,10 +551,7 @@ function buildSignalSnapshot(marketId) {
   const upPrice  = w ? getPrice(w.upToken) : 0;
   const dnPrice  = w ? getPrice(w.dnToken) : 0;
   const blockNum = currentBlockNumber(cfg.blockSize);
-  // Current open positions for this market
   const openForMarket = state.openTrades.filter(t => t.marketId === marketId);
-  const upCount   = openForMarket.filter(t => t.side === 'UP').length;
-  const dnCount   = openForMarket.filter(t => t.side === 'DOWN').length;
   return {
     marketId,
     asset:        cfg.asset,
@@ -535,8 +574,8 @@ function buildSignalSnapshot(marketId) {
     trending,
     historyCount: priceHistory[cfg.asset].length,
     tradesThisWindow: wst.trades || 0,
-    upCount,
-    dnCount,
+    upCount:  openForMarket.filter(t => t.side === 'UP').length,
+    dnCount:  openForMarket.filter(t => t.side === 'DOWN').length,
   };
 }
 
@@ -545,7 +584,7 @@ function buildDashboardSnapshot() {
     balance:      +state.balance.toFixed(2),
     totalPnl:     +state.totalPnl.toFixed(2),
     pnl5m:        +state.pnl5m.toFixed(2),
-    totalFees:    +state.totalFees.toFixed(4),
+    totalFees:    +state.totalFees.toFixed(2),
     openTrades:   state.openTrades,
     closedTrades: state.closedTrades.slice(-60),
     markets: {
@@ -580,7 +619,7 @@ async function tick() {
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
-  log('🚀 HYDRA — BTC+ETH 5m | flip on opposite signal | TP=0.99 | no SL');
+  log('🚀 HYDRA — BTC+ETH 5m | flip on opposite | TP=0.99 | no SL | fixed balance math');
   log(`   30s blocks | 0.5x avg | token 0.10-0.90 | no trend | 50 shares | $${STARTING_BALANCE} demo`);
   loadState();
   connectBinance('BTC', BINANCE_BTC_WS);
