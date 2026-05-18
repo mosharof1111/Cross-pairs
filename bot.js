@@ -30,21 +30,18 @@ const CRYPTO_FEE_RATE  = 0.018;
 const LAST_MOVE_WINDOW = { 30: 20, 90: 60 };
 
 let state = {
-  balance:    STARTING_BALANCE,
-  openTrades: [],
+  balance:      STARTING_BALANCE,
+  openTrades:   [],
   closedTrades: [],
-  totalPnl:   0,
-  pnl5m:      0,
-  pnl15m:     0,
-  totalFees:  0,
+  totalPnl:     0,
+  pnl5m:        0,
+  pnl15m:       0,
+  totalFees:    0,
 };
 
 const priceBook    = {};
 const marketCache  = {};
 const windowState  = {};
-
-// firedBlocks — key = `${marketId}:${blockNumber}`, value = true
-// Set SYNCHRONOUSLY before any async work to prevent double-fire
 const firedBlocks  = {};
 
 const priceHistory   = { BTC: [], ETH: [] };
@@ -124,7 +121,10 @@ function connectBinance(asset, url) {
       checkSignalsForAsset(asset);
     } catch (_) {}
   });
-  ws.on('close', () => { log(`⚡ Binance ${asset} WS closed — reconnecting in 3s…`); setTimeout(() => connectBinance(asset, url), 3000); });
+  ws.on('close', () => {
+    log(`⚡ Binance ${asset} WS closed — reconnecting in 3s…`);
+    setTimeout(() => connectBinance(asset, url), 3000);
+  });
   ws.on('error', e => log(`⚠️  Binance ${asset}: ${e.message}`));
   if (asset === 'BTC') btcWs = ws;
   else ethWs = ws;
@@ -188,24 +188,21 @@ function checkSignalsForAsset(asset) {
     const blockNum = currentBlockNumber(cfg.blockSize);
     const blockKey = `${marketId}:${blockNum}`;
 
-    // ── ATOMIC block guard ────────────────────────────────────────────────────
-    // Check AND set in the same synchronous operation — no gap for double fire
+    // Hard stop — already fired this block
     if (firedBlocks[blockKey]) continue;
-    firedBlocks[blockKey] = true; // claim this block IMMEDIATELY before any checks
 
-    const avg      = getAverageMove(asset, cfg.blockSize, cfg.historyWindow);
+    // Evaluate ALL conditions before touching firedBlocks
+    const avg = getAverageMove(cfg.asset, cfg.blockSize, cfg.historyWindow);
+    if (avg === 0) continue;
+
     const lookback = LAST_MOVE_WINDOW[cfg.blockSize] || Math.floor(cfg.blockSize * 0.66);
-    const last     = getRecentMove(asset, lookback);
+    const last     = getRecentMove(cfg.asset, lookback);
     const required = avg * MOVE_MULTIPLIER;
 
-    // If conditions not met — release the block so it can fire later this block
-    if (!last.direction || last.absChange === 0 || avg === 0 || last.absChange <= required) {
-      firedBlocks[blockKey] = false; // release — conditions not met
-      continue;
-    }
+    if (!last.direction || last.absChange === 0) continue;
+    if (last.absChange <= required) continue;
 
-    if (isTrending(asset, cfg.blockSize)) {
-      firedBlocks[blockKey] = false; // release — trending
+    if (isTrending(cfg.asset, cfg.blockSize)) {
       const trendKey = `${blockKey}:trendlog`;
       if (!firedBlocks[trendKey]) {
         log(`📊 [${marketId}] TRENDING — skip`);
@@ -218,12 +215,13 @@ function checkSignalsForAsset(asset) {
     const token      = reversed === 'UP' ? w.upToken : w.dnToken;
     const tokenPrice = getPrice(token);
 
-    if (tokenPrice < TOKEN_MIN || tokenPrice > TOKEN_MAX) {
-      firedBlocks[blockKey] = false; // release — token out of range
-      continue;
-    }
+    if (tokenPrice < TOKEN_MIN || tokenPrice > TOKEN_MAX) continue;
 
-    // All checks passed — block stays claimed, fire the trade
+    // All conditions passed — claim block NOW
+    // Double check in case another message slipped through
+    if (firedBlocks[blockKey]) continue;
+    firedBlocks[blockKey] = true;
+
     const nowSec  = Math.floor(Date.now() / 1000);
     const elapsed = nowSec - (blockNum * cfg.blockSize);
     log(`📊 [${marketId}] ${last.direction} $${last.absChange.toFixed(2)} > 0.5x=$${required.toFixed(2)} | token=${tokenPrice.toFixed(3)} | ${elapsed}s into block ✅`);
@@ -265,7 +263,7 @@ function placeTrade(marketId, cfg, w, cws, direction, move, avg, required, token
   emitFn('snapshot', buildDashboardSnapshot());
 }
 
-// ── TP/SL using token IDs stored on trade ────────────────────────────────────
+// ── TP/SL ─────────────────────────────────────────────────────────────────────
 function checkTPSL() {
   const toClose = [];
   for (const t of state.openTrades) {
@@ -395,12 +393,11 @@ async function refreshMarkets() {
 async function pollPrices() {
   const tokens = new Set();
   for (const [marketId, cfg] of Object.entries(MARKETS)) {
-    const cws      = currentWindowStart(cfg.windowSize);
-    const cacheKey = `${marketId}:${cws}`;
-    const w        = marketCache[cacheKey];
+    const cws = currentWindowStart(cfg.windowSize);
+    const w   = marketCache[`${marketId}:${cws}`];
     if (w) { tokens.add(w.upToken); tokens.add(w.dnToken); }
   }
-  // Also poll tokens from open trades that may be from old windows
+  // Always poll open trade tokens regardless of window
   for (const t of state.openTrades) {
     if (t.upToken) tokens.add(t.upToken);
     if (t.dnToken) tokens.add(t.dnToken);
@@ -434,7 +431,7 @@ async function checkResolution() {
 
     log(`⏰ [${marketId}] Resolving ts=${ts} (${tradesInWindow.length} trades)…`);
 
-    // Collect all token IDs from the trades themselves
+    // Collect all token IDs directly from trades
     const allTokens = new Set();
     for (const t of tradesInWindow) {
       if (t.upToken) allTokens.add(t.upToken);
@@ -451,7 +448,8 @@ async function checkResolution() {
       } catch (_) {}
     }));
 
-    log(`   [${marketId}] Resolved prices: UP=${resolvedPrices[tradesInWindow[0]?.upToken]?.toFixed(3)||'?'} DN=${resolvedPrices[tradesInWindow[0]?.dnToken]?.toFixed(3)||'?'}`);
+    const sample = tradesInWindow[0];
+    log(`   [${marketId}] UP=${resolvedPrices[sample?.upToken]?.toFixed(3)||'?'} DN=${resolvedPrices[sample?.dnToken]?.toFixed(3)||'?'}`);
 
     let windowPnl = 0;
     for (const t of tradesInWindow) {
@@ -558,6 +556,7 @@ function prune() {
     const cfg = MARKETS[marketId];
     if (cfg && Number(tsStr) < nowSec - cfg.windowSize * 3) delete marketCache[key];
   }
+  // Prune fired blocks older than 4 hours
   const cutoff = Math.floor(nowSec / 30) - 480;
   for (const key of Object.keys(firedBlocks)) {
     const parts    = key.split(':');
@@ -581,7 +580,7 @@ async function tick() {
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
-  log('🚀 Multi-Market Reversion Bot — intra-block | single fire | fees + SL/TP');
+  log('🚀 Multi-Market Reversion Bot — single fire per block | fees + SL/TP');
   log(`   SL=${STOP_LOSS} | TP=${TAKE_PROFIT} | fee=1.8%×p×(1-p) | balance=$${STARTING_BALANCE}`);
   log('   5m: 30s blocks | 15min history | 50 shares');
   log('   15m: 90s blocks | 45min history | 50 shares');
