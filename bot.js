@@ -13,8 +13,8 @@ const BINANCE_BTC_WS = 'wss://stream.binance.com:9443/ws/btcusdt@aggTrade';
 const BINANCE_ETH_WS = 'wss://stream.binance.com:9443/ws/ethusdt@aggTrade';
 
 const MARKETS = {
-  'btc-5m': { asset: 'BTC', slug: 'btc-updown-5m', windowSize: 300, blockSize: 30, historyWindow: 900, shares: 50 },
-  'eth-5m': { asset: 'ETH', slug: 'eth-updown-5m', windowSize: 300, blockSize: 30, historyWindow: 900, shares: 50 },
+  'btc-5m': { asset: 'BTC', slug: 'btc-updown-5m', windowSize: 300, blockSize: 30, historyWindow: 900, shares: 100 },
+  'eth-5m': { asset: 'ETH', slug: 'eth-updown-5m', windowSize: 300, blockSize: 30, historyWindow: 900, shares: 100 },
 };
 
 const TOKEN_MIN        = 0.10;
