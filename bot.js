@@ -23,7 +23,7 @@ const TOKEN_MIN        = 0.10;
 const TOKEN_MAX        = 0.90;
 const MOVE_MULTIPLIER  = 0.5;
 const TREND_BUCKETS    = 3;
-const STARTING_BALANCE = 1000;
+const STARTING_BALANCE = 2000;
 
 const STOP_LOSS      = 0.03;   // exit if token drops to 0.03
 const TAKE_PROFIT    = 0.99;   // exit if token reaches 0.99
