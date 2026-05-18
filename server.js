@@ -1,51 +1,38 @@
-'use strict';
-
-const express   = require('express');
-const http      = require('http');
+const { start, stop, buildDashboardSnapshot, updateConfig, setBotRunning } = require('./bot');
+const express = require('express');
+const http    = require('http');
 const { Server } = require('socket.io');
-const path      = require('path');
-const bot       = require('./bot');
-
-const PORT = process.env.PORT || 3000;
+const path    = require('path');
 
 const app    = express();
 const server = http.createServer(app);
-const io     = new Server(server, { cors: { origin: '*' } });
+const io     = new Server(server);
 
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Config update endpoint
+app.post('/config', (req, res) => {
+  try {
+    updateConfig(req.body);
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// ─── Socket.io ────────────────────────────────────────────────────────────────
+// Start/stop endpoints
+app.post('/start', (req, res) => { setBotRunning(true);  res.json({ ok: true }); });
+app.post('/stop',  (req, res) => { setBotRunning(false); res.json({ ok: true }); });
+
+const logs = [];
 io.on('connection', (socket) => {
-  console.log(`[socket] client connected: ${socket.id}`);
-  // Send current snapshot immediately on connect
-  const snap = bot.buildDashboardSnapshot();
-  socket.emit('snapshot', snap);
-
-  socket.on('disconnect', () => {
-    console.log(`[socket] client disconnected: ${socket.id}`);
-  });
+  socket.emit('snapshot', buildDashboardSnapshot());
+  logs.slice(-100).forEach(l => socket.emit('log', l));
 });
 
-// Bot emit helpers
-function emit(event, data) {
-  io.emit(event, data);
-}
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
-function logEmit(line) {
-  io.emit('log', line);
-}
-
-// ─── Start ────────────────────────────────────────────────────────────────────
-server.listen(PORT, () => {
-  console.log(`[server] listening on http://localhost:${PORT}`);
-  bot.start(emit, logEmit);
-});
-
-process.on('SIGTERM', () => {
-  bot.stop();
-  server.close();
-});
+start(
+  (event, data) => io.emit(event, data),
+  (line) => { logs.push(line); if (logs.length > 500) logs.shift(); io.emit('log', line); }
+);
