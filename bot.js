@@ -60,9 +60,7 @@ const CRYPTO_FEE_RATE  = 0.018;
 const STARTING_BALANCE = IS_LIVE ? 150 : 2000;
 const WINDOW_SIZE      = 300;
 
-// ── V2 Contract Addresses ─────────────────────────────────────────────────────
-const CTF_EXCHANGE = '0xE111180000d2663C0091e4f400237545B87B996B'; // ✅ V2
-const PUSD_ADDRESS = '0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB'; // ✅ pUSD
+const CTF_EXCHANGE = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
 
 let config   = { ...DEFAULT_CONFIG };
 let apiCreds = null;
@@ -265,57 +263,53 @@ function buildL2Headers(method, path, body = '') {
   };
 }
 
-// ── EIP-712 order signing (V2) ────────────────────────────────────────────────
+// ── EIP-712 order signing ─────────────────────────────────────────────────────
 async function buildSignedOrder(tokenId, side, price, size) {
   if (!wallet) throw new Error('No wallet');
-
   const makerAmount = side === 'BUY'
     ? Math.round(price * size * 1e6)
     : Math.round(size * 1e6);
   const takerAmount = side === 'BUY'
     ? Math.round(size * 1e6)
     : Math.round(price * size * 1e6);
-
-  const timestamp = Math.floor(Date.now() / 1000);
+  const nonce      = Math.floor(Date.now() / 1000);
+  const feeRateBps = Math.round(CRYPTO_FEE_RATE * price * (1 - price) * 10000);
 
   const orderData = {
-    salt:          timestamp.toString(),
+    salt:          nonce.toString(),
     maker:         FUNDER_ADDRESS,
     signer:        wallet.address,
+    taker:         '0x0000000000000000000000000000000000000000',
     tokenId:       tokenId,
     makerAmount:   makerAmount.toString(),
     takerAmount:   takerAmount.toString(),
     expiration:    '0',
+    nonce:         '0',
+    feeRateBps:    feeRateBps.toString(),
     side:          side === 'BUY' ? '0' : '1',
     signatureType: SIGNATURE_TYPE,
-    timestamp:     timestamp.toString(),
-    metadata:      '0x',
-    builder:       '0x0000000000000000000000000000000000000000',
-    // ✅ V2: taker, nonce, feeRateBps removed
   };
 
   const domain = {
     name:              'Polymarket CTF Exchange',
-    version:           '2',          // ✅ V2
+    version:           '1',
     chainId:           CHAIN_ID,
-    verifyingContract: CTF_EXCHANGE, // ✅ V2 address
+    verifyingContract: CTF_EXCHANGE,
   };
-
   const types = {
     Order: [
       { name: 'salt',          type: 'uint256' },
       { name: 'maker',         type: 'address' },
       { name: 'signer',        type: 'address' },
+      { name: 'taker',         type: 'address' },
       { name: 'tokenId',       type: 'uint256' },
       { name: 'makerAmount',   type: 'uint256' },
       { name: 'takerAmount',   type: 'uint256' },
       { name: 'expiration',    type: 'uint256' },
+      { name: 'nonce',         type: 'uint256' },
+      { name: 'feeRateBps',    type: 'uint256' },
       { name: 'side',          type: 'uint8'   },
       { name: 'signatureType', type: 'uint8'   },
-      { name: 'timestamp',     type: 'uint256' },
-      { name: 'metadata',      type: 'bytes'   },
-      { name: 'builder',       type: 'address' },
-      // ✅ V2: taker, nonce, feeRateBps removed from types
     ],
   };
 
@@ -323,15 +317,15 @@ async function buildSignedOrder(tokenId, side, price, size) {
     salt:          BigInt(orderData.salt),
     maker:         orderData.maker,
     signer:        orderData.signer,
+    taker:         orderData.taker,
     tokenId:       BigInt(tokenId),
     makerAmount:   BigInt(orderData.makerAmount),
     takerAmount:   BigInt(orderData.takerAmount),
     expiration:    BigInt(orderData.expiration),
+    nonce:         BigInt(orderData.nonce),
+    feeRateBps:    BigInt(orderData.feeRateBps),
     side:          parseInt(orderData.side),
     signatureType: parseInt(orderData.signatureType),
-    timestamp:     BigInt(orderData.timestamp),
-    metadata:      orderData.metadata,
-    builder:       orderData.builder,
   });
 
   return { ...orderData, signature };
@@ -418,19 +412,17 @@ async function cancelOrder(orderId) {
   } catch (e) { log(`⚠️  cancelOrder ${orderId}: ${e.message}`); }
 }
 
-// ── Fetch real pUSD balance directly from chain (V2) ─────────────────────────
+// ── Fetch real balance ────────────────────────────────────────────────────────
 async function fetchRealBalance() {
   try {
-    const provider = new ethers.providers.JsonRpcProvider(POLYGON_RPC);
-    const pusd = new ethers.Contract(
-      PUSD_ADDRESS,
-      ['function balanceOf(address) view returns (uint256)'],
-      provider
-    );
-    const raw = await pusd.balanceOf(FUNDER_ADDRESS);
-    // pUSD has 6 decimals like USDC
-    state.balance = +parseFloat(ethers.utils.formatUnits(raw, 6)).toFixed(2);
-    log(`💰 Real balance: $${state.balance}`);
+    if (!apiCreds) return;
+    const headers = buildL2Headers('GET', '/balance', '');
+    const res  = await fetch(`${CLOB_REST}/balance`, { headers, timeout: 5000 });
+    const data = await res.json();
+    if (data.balance !== undefined) {
+      state.balance = +parseFloat(data.balance).toFixed(2);
+      log(`💰 Real balance: $${state.balance}`);
+    }
   } catch (e) { log(`⚠️  fetchRealBalance: ${e.message}`); }
 }
 
