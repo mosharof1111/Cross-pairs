@@ -11,15 +11,10 @@ const io     = new Server(server);
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Config update endpoint
 app.post('/config', (req, res) => {
-  try {
-    updateConfig(req.body);
-    res.json({ ok: true });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  try { updateConfig(req.body); res.json({ ok: true }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
 });
-
-// Start/stop endpoints
 app.post('/start', (req, res) => { setBotRunning(true);  res.json({ ok: true }); });
 app.post('/stop',  (req, res) => { setBotRunning(false); res.json({ ok: true }); });
 
@@ -30,7 +25,7 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Server on port ${PORT}`));
 
 start(
   (event, data) => io.emit(event, data),
