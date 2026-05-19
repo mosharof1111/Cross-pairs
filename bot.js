@@ -33,7 +33,7 @@ const BINANCE_STREAMS = {
 };
 
 const DEFAULT_CONFIG = {
-  shares: 10, moveMultiplier: 0.5, blockSize: 30,
+  shares: 5, moveMultiplier: 0.5, blockSize: 30,
   tokenMin: 0.10, tokenMax: 0.90, trendBuckets: 3,
   exitAtSecond: 295, takeProfit: 0.99, historyWindow: 900,
   markets: { 'btc-5m': true, 'eth-5m': true, 'sol-5m': true, 'doge-5m': true },
@@ -381,7 +381,7 @@ async function placeBatchSellOrders(trades) {
       const curPrice = roundPrice(getPrice(tokenId));
       if (curPrice <= 0) continue;
       const order = await buildSignedOrderV2(tokenId, 'SELL', curPrice, t.shares);
-      orders.push({ order, owner: apiCreds.apiKey, orderType: 'GTC' });
+      orders.push({ order, owner: apiCreds.apiKey, orderType: 'FOK' });
     }
     if (!orders.length) return;
     const bodyStr = JSON.stringify(orders);
