@@ -52,7 +52,7 @@ const STARTING_BALANCE = IS_LIVE ? 150 : 2000;
 const WINDOW_SIZE      = 300;
 
 // ── V2 contract addresses ─────────────────────────────────────────────────────
-const CTF_EXCHANGE_V2     = '0xE111180000d2663C0091e4f400237545B87B996B';
+const CTF_EXCHANGE_V2      = '0xE111180000d2663C0091e4f400237545B87B996B';
 const NEG_RISK_EXCHANGE_V2 = '0xe2222d279d744050d28e00520010520000310F59';
 
 let config   = { ...DEFAULT_CONFIG };
@@ -83,6 +83,7 @@ const binanceWs      = { BTC: null, ETH: null, SOL: null, DOGE: null };
 let emitFn = () => {};
 let logFn  = () => {};
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function addMoney(a, b) { return +((a * 100 + b * 100) / 100).toFixed(2); }
 function subMoney(a, b) { return +((a * 100 - b * 100) / 100).toFixed(2); }
 function calcFee(shares, price) {
@@ -167,15 +168,17 @@ function initWallet() {
   log(`🔑 Wallet:  ${wallet.address}`);
   log(`💼 Funder:  ${FUNDER_ADDRESS}`);
   log(`🔏 Sig type: ${SIGNATURE_TYPE}`);
+  if (wallet.address.toLowerCase() === FUNDER_ADDRESS.toLowerCase()) {
+    log('⚠️  WARNING: Wallet and Funder address are the same — check FUNDER_ADDRESS in Railway');
+  }
 }
 
-// ── L1 auth — EIP-712 ClobAuthDomain v1 (unchanged in V2) ────────────────────
+// ── L1 auth — ClobAuthDomain v1 (unchanged in V2) ────────────────────────────
 async function initApiCreds() {
   try {
     const timestamp = Math.floor(Date.now() / 1000).toString();
     const nonce     = Math.floor(Math.random() * 1e10).toString();
 
-    // ClobAuthDomain stays version "1" in V2 — confirmed in docs
     const domain = { name: 'ClobAuthDomain', version: '1', chainId: CHAIN_ID };
     const types  = {
       ClobAuth: [
@@ -203,7 +206,7 @@ async function initApiCreds() {
       'Content-Type':        'application/json',
     };
 
-    // Try GET — load existing creds
+    // Try GET first — load existing creds
     const res = await fetch(`${CLOB_REST}/auth/api-key`, { headers, timeout: 10000 });
     if (res.ok) {
       apiCreds = await res.json();
@@ -225,11 +228,11 @@ async function initApiCreds() {
 }
 
 // ── L2 HMAC headers ───────────────────────────────────────────────────────────
-function buildL2Headers(method, path, body = '') {
+function buildL2Headers(method, reqPath, body = '') {
   if (!apiCreds) throw new Error('API creds not initialized');
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const nonce     = Math.floor(Math.random() * 1e10).toString();
-  const message   = timestamp + method.toUpperCase() + path + body;
+  const message   = timestamp + method.toUpperCase() + reqPath + body;
   const hmac = crypto.createHmac('sha256', Buffer.from(apiCreds.secret, 'base64'))
     .update(message).digest('base64');
   return {
@@ -245,9 +248,9 @@ function buildL2Headers(method, path, body = '') {
 }
 
 // ── V2 EIP-712 order signing ──────────────────────────────────────────────────
-// V2 order struct: salt, maker, signer, taker, tokenId, makerAmount,
-//   takerAmount, timestamp(ms), metadata, builder, side, signatureType
-// Dropped from V1: nonce, feeRateBps, expiration, taker (always zero addr)
+// V2 struct: salt, maker, signer, taker, tokenId, makerAmount,
+//            takerAmount, timestamp(ms), metadata, builder, side, signatureType
+// Removed vs V1: nonce, feeRateBps, expiration, taker (now always zero)
 async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
   if (!wallet) throw new Error('No wallet');
 
@@ -258,14 +261,14 @@ async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
     ? Math.round(size * 1e6)           // shares out
     : Math.round(price * size * 1e6);  // pUSD out
 
-  const salt      = Date.now().toString();       // ms timestamp as salt
-  const tsMs      = Date.now().toString();       // timestamp field = ms
-  const metadata  = '0x';                        // empty metadata
+  const salt      = Date.now().toString();
+  const tsMs      = Date.now().toString();
   const builder   = '0x0000000000000000000000000000000000000000';
+  const zeroAddr  = '0x0000000000000000000000000000000000000000';
 
   const verifyingContract = negRisk ? NEG_RISK_EXCHANGE_V2 : CTF_EXCHANGE_V2;
 
-  // V2 EIP-712 domain — version "2" for exchange (not auth)
+  // V2 domain — version "2" for exchange signing
   const domain = {
     name:              'Polymarket CTF Exchange',
     version:           '2',
@@ -273,21 +276,21 @@ async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
     verifyingContract,
   };
 
-  // V2 Order type — nonce/feeRateBps/taker/expiration REMOVED
+  // V2 Order type — metadata is bytes
   const types = {
     Order: [
-      { name: 'salt',          type: 'uint256'  },
-      { name: 'maker',         type: 'address'  },
-      { name: 'signer',        type: 'address'  },
-      { name: 'taker',         type: 'address'  },
-      { name: 'tokenId',       type: 'uint256'  },
-      { name: 'makerAmount',   type: 'uint256'  },
-      { name: 'takerAmount',   type: 'uint256'  },
-      { name: 'timestamp',     type: 'uint256'  },
-      { name: 'metadata',      type: 'bytes'    },
-      { name: 'builder',       type: 'address'  },
-      { name: 'side',          type: 'uint8'    },
-      { name: 'signatureType', type: 'uint8'    },
+      { name: 'salt',          type: 'uint256' },
+      { name: 'maker',         type: 'address' },
+      { name: 'signer',        type: 'address' },
+      { name: 'taker',         type: 'address' },
+      { name: 'tokenId',       type: 'uint256' },
+      { name: 'makerAmount',   type: 'uint256' },
+      { name: 'takerAmount',   type: 'uint256' },
+      { name: 'timestamp',     type: 'uint256' },
+      { name: 'metadata',      type: 'bytes'   },
+      { name: 'builder',       type: 'address' },
+      { name: 'side',          type: 'uint8'   },
+      { name: 'signatureType', type: 'uint8'   },
     ],
   };
 
@@ -295,12 +298,12 @@ async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
     salt:          BigInt(salt),
     maker:         FUNDER_ADDRESS,
     signer:        wallet.address,
-    taker:         '0x0000000000000000000000000000000000000000',
+    taker:         zeroAddr,
     tokenId:       BigInt(tokenId),
     makerAmount:   BigInt(makerAmount),
     takerAmount:   BigInt(takerAmount),
     timestamp:     BigInt(tsMs),
-    metadata:      ethers.utils.arrayify('0x'),
+    metadata:      new Uint8Array(0),   // empty bytes — fixed from previous version
     builder:       builder,
     side:          side === 'BUY' ? 0 : 1,
     signatureType: parseInt(SIGNATURE_TYPE),
@@ -308,17 +311,17 @@ async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
 
   const signature = await wallet._signTypedData(domain, types, orderValue);
 
-  // Return the order body for POST /order
+  // Body sent to POST /order
   return {
     salt,
     maker:         FUNDER_ADDRESS,
     signer:        wallet.address,
-    taker:         '0x0000000000000000000000000000000000000000',
+    taker:         zeroAddr,
     tokenId:       tokenId.toString(),
     makerAmount:   makerAmount.toString(),
     takerAmount:   takerAmount.toString(),
     timestamp:     tsMs,
-    metadata:      '0x',
+    metadata:      '',                  // empty string in JSON body
     builder,
     side:          side === 'BUY' ? '0' : '1',
     signatureType: SIGNATURE_TYPE,
@@ -408,8 +411,14 @@ async function fetchRealBalance() {
   try {
     if (!apiCreds) return;
     const headers = buildL2Headers('GET', '/balance', '');
-    const res  = await fetch(`${CLOB_REST}/balance`, { headers, timeout: 5000 });
-    const data = await res.json();
+    const res = await fetch(`${CLOB_REST}/balance`, { headers, timeout: 5000 });
+    // Guard against HTML error pages
+    const text = await res.text();
+    if (!text.startsWith('{') && !text.startsWith('[')) {
+      log(`⚠️  Balance endpoint returned non-JSON (geoblock?) — using local balance`);
+      return;
+    }
+    const data = JSON.parse(text);
     if (data.balance !== undefined) {
       state.balance = +parseFloat(data.balance).toFixed(2);
       log(`💰 Real balance: $${state.balance}`);
@@ -453,10 +462,10 @@ function connectBinance(asset) {
 
 // ── Signal logic ──────────────────────────────────────────────────────────────
 function getAverageMove(asset) {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const hist   = priceHistory[asset].filter(h => h.ts >= nowSec - config.historyWindow);
+  const nowSec     = Math.floor(Date.now() / 1000);
+  const hist       = priceHistory[asset].filter(h => h.ts >= nowSec - config.historyWindow);
   const numBuckets = Math.floor(config.historyWindow / config.blockSize);
-  const moves  = [];
+  const moves      = [];
   for (let i = 0; i < numBuckets; i++) {
     const bucketEnd   = nowSec - i * config.blockSize;
     const bucketStart = bucketEnd - config.blockSize;
@@ -561,6 +570,7 @@ async function placeTrade(marketId, w, cws, direction, move, avg, tokenPrice) {
     log(`📤 [${marketId}] FOK BUY ${direction} token=...${tokenId.slice(-6)} price=${tokenPrice} size=${shares}`);
     const result = await placeRealBuyOrder(tokenId, tokenPrice, shares);
     if (!result.success) { log(`❌ [${marketId}] BUY rejected`); return; }
+
     const tpResult  = await placeRealSellOrder(tokenId, config.takeProfit, shares);
     const tpOrderId = tpResult.success ? tpResult.orderId : null;
 
@@ -583,7 +593,7 @@ async function placeTrade(marketId, w, cws, direction, move, avg, tokenPrice) {
     if (!windowState[wstKey]) windowState[wstKey] = { trades: 0 };
     windowState[wstKey].trades++;
     recordEquity(); saveState();
-    log(`🚀 [${marketId}] REAL ${direction} [${id}] price=${tokenPrice} shares=${shares} cost=$${rawCost} TP=${tpOrderId||'failed'} bal=$${state.balance}`);
+    log(`🚀 [${marketId}] REAL ${direction} [${id}] price=${tokenPrice} shares=${shares} cost=$${rawCost} TP_order=${tpOrderId||'failed'} bal=$${state.balance}`);
 
   } else {
     state.balance   = subMoney(state.balance, totalCost);
