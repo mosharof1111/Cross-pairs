@@ -1,0 +1,5 @@
+.env
+trades.json
+config.json
+equity.json
+node_modules/
