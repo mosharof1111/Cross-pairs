@@ -57,6 +57,9 @@ const NEG_RISK_EXCHANGE_V2 = '0xe2222d279d744050d28e00520010520000310F59';
 const ZERO_BYTES32         = '0x0000000000000000000000000000000000000000000000000000000000000000';
 const ZERO_ADDRESS         = '0x0000000000000000000000000000000000000000';
 
+// Round price to 2dp — Polymarket tick size is 0.01 for binary markets
+function roundPrice(p) { return Math.round(p * 100) / 100; }
+
 let config   = { ...DEFAULT_CONFIG };
 let apiCreds = null;
 let wallet   = null;
@@ -85,14 +88,12 @@ const binanceWs      = { BTC: null, ETH: null, SOL: null, DOGE: null };
 let emitFn = () => {};
 let logFn  = () => {};
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 function addMoney(a, b) { return +((a * 100 + b * 100) / 100).toFixed(2); }
 function subMoney(a, b) { return +((a * 100 - b * 100) / 100).toFixed(2); }
 function calcFee(shares, price) {
   return +(shares * CRYPTO_FEE_RATE * price * (1 - price)).toFixed(4);
 }
 
-// ── Persistence ───────────────────────────────────────────────────────────────
 function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
@@ -163,7 +164,6 @@ function priceDec(asset) {
   return 2;
 }
 
-// ── Wallet ────────────────────────────────────────────────────────────────────
 function initWallet() {
   if (!PRIVATE_KEY) { log('⚠️  No PRIVATE_KEY'); return; }
   wallet = new ethers.Wallet(PRIVATE_KEY);
@@ -171,11 +171,11 @@ function initWallet() {
   log(`💼 Funder:      ${FUNDER_ADDRESS}`);
   log(`🔏 Sig type:    ${SIGNATURE_TYPE}`);
   if (wallet.address.toLowerCase() === FUNDER_ADDRESS.toLowerCase()) {
-    log('⚠️  WARNING: EOA and Funder are same — FUNDER_ADDRESS should be proxy from polymarket.com/settings');
+    log('⚠️  WARNING: EOA and Funder are same — check FUNDER_ADDRESS');
   }
 }
 
-// ── L1 auth — POLY_ADDRESS must be EOA wallet.address ────────────────────────
+// ── L1 auth ───────────────────────────────────────────────────────────────────
 async function initApiCreds() {
   try {
     const timestamp = Math.floor(Date.now() / 1000).toString();
@@ -199,7 +199,6 @@ async function initApiCreds() {
 
     const sig = await wallet._signTypedData(domain, types, value);
 
-    // POLY_ADDRESS = EOA wallet.address (NOT funder) — this was the L1 fix
     const headers = {
       'POLY_ADDRESS':        wallet.address,
       'POLY_SIGNATURE':      sig,
@@ -252,22 +251,18 @@ function buildL2Headers(method, reqPath, body = '') {
 }
 
 // ── V2 EIP-712 order signing ──────────────────────────────────────────────────
-// Fixes vs previous version:
-// 1. metadata type = bytes32 (not bytes)
-// 2. builder type = bytes32 (not address)
-// 3. metadata value = ZERO_BYTES32 hex string
-// 4. builder value = ZERO_BYTES32 hex string
-// 5. side in wire body = 'BUY'/'SELL' string (not '0'/'1')
-// 6. POST body includes owner = apiKey
 async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
   if (!wallet) throw new Error('No wallet');
 
+  // KEY FIX: round price to 2dp before calculating amounts
+  const p = roundPrice(price);
+
   const makerAmount = side === 'BUY'
-    ? Math.round(price * size * 1e6)
+    ? Math.round(p * size * 1e6)
     : Math.round(size * 1e6);
   const takerAmount = side === 'BUY'
     ? Math.round(size * 1e6)
-    : Math.round(price * size * 1e6);
+    : Math.round(p * size * 1e6);
 
   const salt = Date.now().toString();
   const tsMs = Date.now().toString();
@@ -280,7 +275,6 @@ async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
     verifyingContract,
   };
 
-  // metadata and builder are bytes32 per official V2 docs
   const types = {
     Order: [
       { name: 'salt',          type: 'uint256' },
@@ -332,10 +326,10 @@ async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
   };
 }
 
-// ── Place FOK buy ─────────────────────────────────────────────────────────────
 async function placeRealBuyOrder(tokenId, price, size, negRisk = false) {
   try {
-    const order   = await buildSignedOrderV2(tokenId, 'BUY', price, size, negRisk);
+    const p     = roundPrice(price);
+    const order = await buildSignedOrderV2(tokenId, 'BUY', p, size, negRisk);
     const bodyStr = JSON.stringify({ order, owner: apiCreds.apiKey, orderType: 'FOK' });
     const headers = buildL2Headers('POST', '/order', bodyStr);
     const res     = await fetch(`${CLOB_REST}/order`, {
@@ -344,7 +338,7 @@ async function placeRealBuyOrder(tokenId, price, size, negRisk = false) {
     const text = await res.text();
     const data = text.startsWith('{') ? JSON.parse(text) : { error: text };
     if (data.success || data.orderID || data.id) {
-      log(`✅ BUY filled: ${data.orderID||data.id} token=...${tokenId.toString().slice(-6)} price=${price} size=${size}`);
+      log(`✅ BUY filled: ${data.orderID||data.id} token=...${tokenId.toString().slice(-6)} price=${p} size=${size}`);
       return { success: true, orderId: data.orderID || data.id };
     }
     log(`⚠️  BUY failed: ${JSON.stringify(data)}`);
@@ -355,10 +349,10 @@ async function placeRealBuyOrder(tokenId, price, size, negRisk = false) {
   }
 }
 
-// ── Place GTC limit sell at TP ────────────────────────────────────────────────
 async function placeRealSellOrder(tokenId, price, size, negRisk = false) {
   try {
-    const order   = await buildSignedOrderV2(tokenId, 'SELL', price, size, negRisk);
+    const p     = roundPrice(price);
+    const order = await buildSignedOrderV2(tokenId, 'SELL', p, size, negRisk);
     const bodyStr = JSON.stringify({ order, owner: apiCreds.apiKey, orderType: 'GTC' });
     const headers = buildL2Headers('POST', '/order', bodyStr);
     const res     = await fetch(`${CLOB_REST}/order`, {
@@ -367,7 +361,7 @@ async function placeRealSellOrder(tokenId, price, size, negRisk = false) {
     const text = await res.text();
     const data = text.startsWith('{') ? JSON.parse(text) : { error: text };
     if (data.success || data.orderID || data.id) {
-      log(`✅ SELL limit @ ${price}: ${data.orderID||data.id}`);
+      log(`✅ SELL limit @ ${p}: ${data.orderID||data.id}`);
       return { success: true, orderId: data.orderID || data.id };
     }
     log(`⚠️  SELL failed: ${JSON.stringify(data)}`);
@@ -378,14 +372,13 @@ async function placeRealSellOrder(tokenId, price, size, negRisk = false) {
   }
 }
 
-// ── Batch sell POST /orders — 4:55 exit ───────────────────────────────────────
 async function placeBatchSellOrders(trades) {
   if (!trades.length) return;
   try {
     const orders = [];
     for (const t of trades) {
       const tokenId  = t.side === 'UP' ? t.upToken : t.dnToken;
-      const curPrice = getPrice(tokenId);
+      const curPrice = roundPrice(getPrice(tokenId));
       if (curPrice <= 0) continue;
       const order = await buildSignedOrderV2(tokenId, 'SELL', curPrice, t.shares);
       orders.push({ order, owner: apiCreds.apiKey, orderType: 'FOK' });
@@ -543,20 +536,21 @@ function checkSignals() {
 
     const newDirection = last.direction === 'UP' ? 'DOWN' : 'UP';
     const token        = newDirection === 'UP' ? w.upToken : w.dnToken;
-    const tokenPrice   = getPrice(token);
+    const tokenPrice   = roundPrice(getPrice(token));
     if (tokenPrice < config.tokenMin || tokenPrice > config.tokenMax) {
-      log(`📊 [${marketId}] token=${tokenPrice.toFixed(3)} outside range — skip`); continue;
+      log(`📊 [${marketId}] token=${tokenPrice.toFixed(2)} outside range — skip`); continue;
     }
 
-    log(`📊 [${marketId}] avg=${avg.toFixed(5)} last=${last.direction} ${last.absChange.toFixed(5)} | token=${tokenPrice.toFixed(3)} ✅ SIGNAL ${newDirection}`);
+    log(`📊 [${marketId}] avg=${avg.toFixed(5)} last=${last.direction} ${last.absChange.toFixed(5)} | token=${tokenPrice.toFixed(2)} ✅ SIGNAL ${newDirection}`);
     placeTrade(marketId, w, cws, newDirection, last.absChange, avg, tokenPrice);
   }
 }
 
 async function placeTrade(marketId, w, cws, direction, move, avg, tokenPrice) {
   const shares    = config.shares;
-  const rawCost   = +(tokenPrice * shares).toFixed(2);
-  const fee       = calcFee(shares, tokenPrice);
+  const price     = roundPrice(tokenPrice);
+  const rawCost   = +(price * shares).toFixed(2);
+  const fee       = calcFee(shares, price);
   const totalCost = +(rawCost + fee).toFixed(2);
 
   if (state.balance < totalCost) {
@@ -567,8 +561,8 @@ async function placeTrade(marketId, w, cws, direction, move, avg, tokenPrice) {
 
   if (IS_LIVE) {
     if (!apiCreds) { log(`❌ [${marketId}] API creds not ready`); return; }
-    log(`📤 [${marketId}] FOK BUY ${direction} token=...${tokenId.slice(-6)} price=${tokenPrice} size=${shares}`);
-    const result = await placeRealBuyOrder(tokenId, tokenPrice, shares);
+    log(`📤 [${marketId}] FOK BUY ${direction} token=...${tokenId.slice(-6)} price=${price} size=${shares}`);
+    const result = await placeRealBuyOrder(tokenId, price, shares);
     if (!result.success) { log(`❌ [${marketId}] BUY rejected`); return; }
     const tpResult  = await placeRealSellOrder(tokenId, config.takeProfit, shares);
     const tpOrderId = tpResult.success ? tpResult.orderId : null;
@@ -579,7 +573,7 @@ async function placeTrade(marketId, w, cws, direction, move, avg, tokenPrice) {
     state.openTrades.push({
       id, marketId, windowStart: cws,
       asset: MARKET_ASSETS[marketId], side: direction,
-      entryPrice: tokenPrice, shares, rawCost, fee, cost: totalCost,
+      entryPrice: price, shares, rawCost, fee, cost: totalCost,
       tp: config.takeProfit, upToken: w.upToken, dnToken: w.dnToken,
       tokenId, tpOrderId,
       move: +move.toFixed(6), avg: +avg.toFixed(6),
@@ -591,7 +585,7 @@ async function placeTrade(marketId, w, cws, direction, move, avg, tokenPrice) {
     if (!windowState[wstKey]) windowState[wstKey] = { trades: 0 };
     windowState[wstKey].trades++;
     recordEquity(); saveState();
-    log(`🚀 [${marketId}] REAL ${direction} [${id}] price=${tokenPrice} shares=${shares} cost=$${rawCost} TP=${tpOrderId||'failed'} bal=$${state.balance}`);
+    log(`🚀 [${marketId}] REAL ${direction} [${id}] price=${price} shares=${shares} cost=$${rawCost} TP=${tpOrderId||'failed'} bal=$${state.balance}`);
 
   } else {
     state.balance   = subMoney(state.balance, totalCost);
@@ -600,7 +594,7 @@ async function placeTrade(marketId, w, cws, direction, move, avg, tokenPrice) {
     state.openTrades.push({
       id, marketId, windowStart: cws,
       asset: MARKET_ASSETS[marketId], side: direction,
-      entryPrice: tokenPrice, shares, rawCost, fee, cost: totalCost,
+      entryPrice: price, shares, rawCost, fee, cost: totalCost,
       tp: config.takeProfit, upToken: w.upToken, dnToken: w.dnToken, tokenId,
       move: +move.toFixed(6), avg: +avg.toFixed(6),
       assetPriceAtEntry: +binancePrices[MARKET_ASSETS[marketId]].toFixed(6),
@@ -611,7 +605,7 @@ async function placeTrade(marketId, w, cws, direction, move, avg, tokenPrice) {
     if (!windowState[wstKey]) windowState[wstKey] = { trades: 0 };
     windowState[wstKey].trades++;
     recordEquity(); saveState();
-    log(`🚀 [${marketId}] DEMO ${direction} [${id}] price=${tokenPrice} shares=${shares} cost=$${rawCost} bal=$${state.balance}`);
+    log(`🚀 [${marketId}] DEMO ${direction} [${id}] price=${price} shares=${shares} cost=$${rawCost} bal=$${state.balance}`);
   }
   emitFn('snapshot', buildDashboardSnapshot());
 }
@@ -640,7 +634,7 @@ async function closeTrade(t, exitPrice, reason) {
     closedAt: new Date().toISOString(), exitReason: reason,
   });
   recordEquity(); saveState();
-  log(`${pnl >= 0 ? '🟢' : '🔴'} [${t.marketId}] ${reason} ${t.side} [${t.id}] entry=${t.entryPrice.toFixed(3)} exit=${exitPrice.toFixed(3)} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
+  log(`${pnl >= 0 ? '🟢' : '🔴'} [${t.marketId}] ${reason} ${t.side} [${t.id}] entry=${t.entryPrice.toFixed(2)} exit=${exitPrice.toFixed(2)} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
   emitFn('snapshot', buildDashboardSnapshot());
 }
 
