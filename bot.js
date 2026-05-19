@@ -4,11 +4,24 @@ const fetch     = require('node-fetch');
 const WebSocket = require('ws');
 const fs        = require('fs');
 const path      = require('path');
+const ethers    = require('ethers');
+const crypto    = require('crypto');
 
-const GAMMA      = 'https://gamma-api.polymarket.com';
-const CLOB_REST  = 'https://clob.polymarket.com';
-const TRADES_FILE  = path.join(__dirname, 'trades.json');
-const CONFIG_FILE  = path.join(__dirname, 'config.json');
+// ── Environment ───────────────────────────────────────────────────────────────
+const PRIVATE_KEY    = process.env.PRIVATE_KEY    || '';
+const FUNDER_ADDRESS = process.env.FUNDER_ADDRESS || '';
+const POLYGON_RPC    = process.env.POLYGON_RPC    || 'https://polygon-rpc.com';
+const TRADE_MODE     = (process.env.TRADE_MODE    || 'demo').toLowerCase(); // 'live' or 'demo'
+
+const IS_LIVE = TRADE_MODE === 'live';
+
+const GAMMA     = 'https://gamma-api.polymarket.com';
+const CLOB_REST = 'https://clob.polymarket.com';
+const CHAIN_ID  = 137;
+
+const TRADES_FILE = path.join(__dirname, 'trades.json');
+const CONFIG_FILE = path.join(__dirname, 'config.json');
+const EQUITY_FILE = path.join(__dirname, 'equity.json');
 
 const BINANCE_STREAMS = {
   BTC:  'wss://stream.binance.com:9443/ws/btcusdt@aggTrade',
@@ -18,20 +31,18 @@ const BINANCE_STREAMS = {
 };
 
 const DEFAULT_CONFIG = {
-  shares:         100,
+  shares:         5,
   moveMultiplier: 0.5,
   blockSize:      30,
   tokenMin:       0.10,
   tokenMax:       0.90,
   trendBuckets:   3,
-  exitAtSecond:   290,
+  exitAtSecond:   295,
   takeProfit:     0.99,
   historyWindow:  900,
   markets: {
-    'btc-5m':  true,
-    'eth-5m':  true,
-    'sol-5m':  true,
-    'doge-5m': true,
+    'btc-5m': true, 'eth-5m': true,
+    'sol-5m': true, 'doge-5m': true,
   },
 };
 
@@ -44,10 +55,16 @@ const MARKET_ASSETS = {
 };
 
 const CRYPTO_FEE_RATE  = 0.018;
-const STARTING_BALANCE = 2000;
+const STARTING_BALANCE = IS_LIVE ? 150 : 2000;
 const WINDOW_SIZE      = 300;
 
+// ── CTF Exchange contract — for order signing ─────────────────────────────────
+const CTF_EXCHANGE   = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
+const NEG_RISK_ADAPTER = '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296';
+
 let config = { ...DEFAULT_CONFIG };
+let apiCreds = null; // { apiKey, secret, passphrase }
+let wallet   = null; // ethers wallet
 
 let state = {
   balance:      STARTING_BALANCE,
@@ -55,9 +72,11 @@ let state = {
   closedTrades: [],
   totalPnl:     0,
   totalFees:    0,
+  realizedPnl:  0,
 };
 
-let botRunning = false;
+let equityCurve = []; // [{ts, balance}]
+let botRunning  = false;
 
 const priceBook        = {};
 const marketCache      = {};
@@ -74,24 +93,24 @@ const binanceWs      = { BTC: null, ETH: null, SOL: null, DOGE: null };
 let emitFn = () => {};
 let logFn  = () => {};
 
-// ── Config ────────────────────────────────────────────────────────────────────
+// ── Safe math ─────────────────────────────────────────────────────────────────
+function addMoney(a, b) { return +((a * 100 + b * 100) / 100).toFixed(2); }
+function subMoney(a, b) { return +((a * 100 - b * 100) / 100).toFixed(2); }
+function calcFee(shares, price) {
+  return +(shares * CRYPTO_FEE_RATE * price * (1 - price)).toFixed(4);
+}
+
+// ── Persistence ───────────────────────────────────────────────────────────────
 function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
       config = { ...DEFAULT_CONFIG, ...raw };
       config.markets = { ...DEFAULT_CONFIG.markets, ...(raw.markets || {}) };
-      log(`⚙️  Config: shares=${config.shares} mult=${config.moveMultiplier} block=${config.blockSize}s tp=${config.takeProfit} exit=${config.exitAtSecond}s`);
     }
   } catch (e) { log(`⚠️  Config: ${e.message}`); }
 }
 function saveConfig() { fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2)); }
-
-function calcFee(shares, price) {
-  return +(shares * CRYPTO_FEE_RATE * price * (1 - price)).toFixed(4);
-}
-function addMoney(a, b) { return +((a * 100 + b * 100) / 100).toFixed(2); }
-function subMoney(a, b) { return +((a * 100 - b * 100) / 100).toFixed(2); }
 
 function loadState() {
   try {
@@ -99,15 +118,36 @@ function loadState() {
       const raw = JSON.parse(fs.readFileSync(TRADES_FILE, 'utf8'));
       state = { ...state, ...raw };
       if (state.openTrades.length > 0) {
-        log(`♻️  Refunding ${state.openTrades.length} open trade(s)`);
-        for (const t of state.openTrades) state.balance = addMoney(state.balance, t.cost);
-        state.openTrades = [];
-        saveState();
+        log(`♻️  Found ${state.openTrades.length} open trade(s) from previous session`);
+        if (!IS_LIVE) {
+          for (const t of state.openTrades) state.balance = addMoney(state.balance, t.cost);
+          state.openTrades = [];
+          saveState();
+        }
       }
     }
   } catch (e) { log(`⚠️  State: ${e.message}`); }
 }
 function saveState() { fs.writeFileSync(TRADES_FILE, JSON.stringify(state, null, 2)); }
+
+function loadEquity() {
+  try {
+    if (fs.existsSync(EQUITY_FILE)) {
+      equityCurve = JSON.parse(fs.readFileSync(EQUITY_FILE, 'utf8'));
+      if (!Array.isArray(equityCurve)) equityCurve = [];
+      // Keep last 500 points
+      if (equityCurve.length > 500) equityCurve = equityCurve.slice(-500);
+    }
+  } catch (_) { equityCurve = []; }
+}
+function saveEquity() { fs.writeFileSync(EQUITY_FILE, JSON.stringify(equityCurve)); }
+
+function recordEquity() {
+  const point = { ts: Date.now(), balance: +state.balance.toFixed(2) };
+  equityCurve.push(point);
+  if (equityCurve.length > 500) equityCurve = equityCurve.slice(-500);
+  saveEquity();
+}
 
 function log(msg) {
   const line = `[${new Date().toISOString().replace('T',' ').slice(0,19)}] ${msg}`;
@@ -132,6 +172,260 @@ function getPrice(tid) {
 }
 
 function tradeId() { return `T${Date.now().toString(36).toUpperCase()}`; }
+function priceDec(asset) {
+  if (asset === 'DOGE') return 5;
+  if (asset === 'SOL')  return 3;
+  return 2;
+}
+
+// ── Polymarket authentication ─────────────────────────────────────────────────
+// signature_type=2 — MetaMask connected to Polymarket (Gnosis Safe proxy)
+
+function initWallet() {
+  if (!PRIVATE_KEY) { log('⚠️  No PRIVATE_KEY set'); return; }
+  wallet = new ethers.Wallet(PRIVATE_KEY);
+  log(`🔑 Wallet: ${wallet.address}`);
+  log(`💼 Funder: ${FUNDER_ADDRESS}`);
+}
+
+// EIP-712 domain for Polymarket CTF Exchange
+function getEIP712Domain() {
+  return {
+    name: 'Polymarket CTF Exchange',
+    version: '1',
+    chainId: CHAIN_ID,
+    verifyingContract: CTF_EXCHANGE,
+  };
+}
+
+// Sign L1 auth header
+async function signL1Header(timestamp, method, path, body = '') {
+  if (!wallet) throw new Error('Wallet not initialized');
+  const message = timestamp + method.toUpperCase() + path + body;
+  const msgHash = ethers.utils.id(message);
+  const sig = await wallet.signMessage(ethers.utils.arrayify(msgHash));
+  return sig;
+}
+
+// Build L2 HMAC signature for API requests
+function buildL2Headers(method, path, body = '') {
+  if (!apiCreds) throw new Error('API creds not initialized');
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const message   = timestamp + method.toUpperCase() + path + body;
+  const hmac = crypto.createHmac('sha256', Buffer.from(apiCreds.secret, 'base64'))
+    .update(message).digest('base64');
+  return {
+    'POLY_ADDRESS':    FUNDER_ADDRESS,
+    'POLY_SIGNATURE':  hmac,
+    'POLY_TIMESTAMP':  timestamp,
+    'POLY_API_KEY':    apiCreds.apiKey,
+    'POLY_PASSPHRASE': apiCreds.passphrase,
+    'Content-Type':    'application/json',
+  };
+}
+
+async function initApiCreds() {
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sig = await signL1Header(timestamp, 'GET', '/auth/api-key', '');
+    const res = await fetch(`${CLOB_REST}/auth/api-key`, {
+      headers: {
+        'POLY_ADDRESS':   wallet.address,
+        'POLY_SIGNATURE': sig,
+        'POLY_TIMESTAMP': timestamp,
+      },
+    });
+    if (res.ok) {
+      apiCreds = await res.json();
+      log(`✅ API creds loaded`);
+    } else {
+      // Create new creds
+      const res2 = await fetch(`${CLOB_REST}/auth/api-key`, {
+        method: 'POST',
+        headers: {
+          'POLY_ADDRESS':   wallet.address,
+          'POLY_SIGNATURE': sig,
+          'POLY_TIMESTAMP': timestamp,
+        },
+      });
+      if (res2.ok) {
+        apiCreds = await res2.json();
+        log(`✅ API creds created`);
+      } else {
+        const err = await res2.text();
+        log(`⚠️  API creds failed: ${err}`);
+      }
+    }
+  } catch (e) { log(`⚠️  initApiCreds: ${e.message}`); }
+}
+
+// ── Order signing — EIP-712 for signature_type=2 (Gnosis Safe) ────────────────
+async function buildSignedOrder(tokenId, side, price, size) {
+  if (!wallet) throw new Error('No wallet');
+
+  // Polymarket order structure
+  const makerAmount = side === 'BUY'
+    ? Math.round(price * size * 1e6)        // USDC in (6 decimals)
+    : Math.round(size * 1e6);               // shares in
+  const takerAmount = side === 'BUY'
+    ? Math.round(size * 1e6)                // shares out
+    : Math.round(price * size * 1e6);       // USDC out
+
+  const nonce    = Math.floor(Date.now() / 1000);
+  const expiry   = 0; // no expiry for FOK
+  const feeRateBps = Math.round(CRYPTO_FEE_RATE * price * (1 - price) * 10000);
+
+  const orderStruct = {
+    salt:        nonce.toString(),
+    maker:       FUNDER_ADDRESS,
+    signer:      wallet.address,
+    taker:       '0x0000000000000000000000000000000000000000',
+    tokenId:     tokenId,
+    makerAmount: makerAmount.toString(),
+    takerAmount: takerAmount.toString(),
+    expiration:  expiry.toString(),
+    nonce:       '0',
+    feeRateBps:  feeRateBps.toString(),
+    side:        side === 'BUY' ? '0' : '1',
+    signatureType: '2', // Gnosis Safe / MetaMask connected wallet
+  };
+
+  // EIP-712 typed data signing
+  const domain = getEIP712Domain();
+  const types = {
+    Order: [
+      { name: 'salt',          type: 'uint256' },
+      { name: 'maker',         type: 'address' },
+      { name: 'signer',        type: 'address' },
+      { name: 'taker',         type: 'address' },
+      { name: 'tokenId',       type: 'uint256' },
+      { name: 'makerAmount',   type: 'uint256' },
+      { name: 'takerAmount',   type: 'uint256' },
+      { name: 'expiration',    type: 'uint256' },
+      { name: 'nonce',         type: 'uint256' },
+      { name: 'feeRateBps',    type: 'uint256' },
+      { name: 'side',          type: 'uint8'   },
+      { name: 'signatureType', type: 'uint8'   },
+    ],
+  };
+
+  const signature = await wallet._signTypedData(domain, types, {
+    salt:          BigInt(orderStruct.salt),
+    maker:         orderStruct.maker,
+    signer:        orderStruct.signer,
+    taker:         orderStruct.taker,
+    tokenId:       BigInt(tokenId),
+    makerAmount:   BigInt(orderStruct.makerAmount),
+    takerAmount:   BigInt(orderStruct.takerAmount),
+    expiration:    BigInt(orderStruct.expiration),
+    nonce:         BigInt(orderStruct.nonce),
+    feeRateBps:    BigInt(orderStruct.feeRateBps),
+    side:          parseInt(orderStruct.side),
+    signatureType: parseInt(orderStruct.signatureType),
+  });
+
+  return { ...orderStruct, signature };
+}
+
+// ── Place FOK buy order ───────────────────────────────────────────────────────
+async function placeRealBuyOrder(tokenId, price, size) {
+  try {
+    const order   = await buildSignedOrder(tokenId, 'BUY', price, size);
+    const bodyStr = JSON.stringify({ order, orderType: 'FOK' });
+    const headers = buildL2Headers('POST', '/order', bodyStr);
+    const res = await fetch(`${CLOB_REST}/order`, {
+      method: 'POST', headers, body: bodyStr, timeout: 8000,
+    });
+    const data = await res.json();
+    if (data.success || data.orderID) {
+      log(`✅ BUY order placed: ${data.orderID || data.id} token=${tokenId.slice(-8)} price=${price} size=${size}`);
+      return { success: true, orderId: data.orderID || data.id, filled: data.sizeMatched || size };
+    } else {
+      log(`⚠️  BUY order failed: ${JSON.stringify(data)}`);
+      return { success: false };
+    }
+  } catch (e) {
+    log(`⚠️  placeRealBuyOrder: ${e.message}`);
+    return { success: false };
+  }
+}
+
+// ── Place limit sell at TP price immediately after buy fills ──────────────────
+async function placeRealSellOrder(tokenId, price, size) {
+  try {
+    const order   = await buildSignedOrder(tokenId, 'SELL', price, size);
+    const bodyStr = JSON.stringify({ order, orderType: 'GTC' });
+    const headers = buildL2Headers('POST', '/order', bodyStr);
+    const res = await fetch(`${CLOB_REST}/order`, {
+      method: 'POST', headers, body: bodyStr, timeout: 8000,
+    });
+    const data = await res.json();
+    if (data.success || data.orderID) {
+      log(`✅ SELL limit placed at ${price}: ${data.orderID || data.id}`);
+      return { success: true, orderId: data.orderID || data.id };
+    } else {
+      log(`⚠️  SELL order failed: ${JSON.stringify(data)}`);
+      return { success: false };
+    }
+  } catch (e) {
+    log(`⚠️  placeRealSellOrder: ${e.message}`);
+    return { success: false };
+  }
+}
+
+// ── Batch sell — POST /orders — for 4:55 window exit ─────────────────────────
+async function placeBatchSellOrders(tradesForMarket) {
+  if (!tradesForMarket.length) return;
+  try {
+    const orders = [];
+    for (const t of tradesForMarket) {
+      const tokenId  = t.side === 'UP' ? t.upToken : t.dnToken;
+      const curPrice = getPrice(tokenId);
+      if (curPrice <= 0) continue;
+      const order = await buildSignedOrder(tokenId, 'SELL', curPrice, t.shares);
+      orders.push({ order, orderType: 'FOK' });
+    }
+    if (!orders.length) return;
+    const bodyStr = JSON.stringify(orders);
+    const headers = buildL2Headers('POST', '/orders', bodyStr);
+    const res = await fetch(`${CLOB_REST}/orders`, {
+      method: 'POST', headers, body: bodyStr, timeout: 10000,
+    });
+    const data = await res.json();
+    log(`✅ Batch sell submitted: ${orders.length} orders | response: ${JSON.stringify(data).slice(0,100)}`);
+    return data;
+  } catch (e) {
+    log(`⚠️  placeBatchSellOrders: ${e.message}`);
+  }
+}
+
+// ── Cancel open TP sell orders for a trade (used at window exit) ──────────────
+async function cancelOrder(orderId) {
+  try {
+    const bodyStr = JSON.stringify({ orderID: orderId });
+    const headers = buildL2Headers('DELETE', '/order', bodyStr);
+    const res = await fetch(`${CLOB_REST}/order`, {
+      method: 'DELETE', headers, body: bodyStr, timeout: 5000,
+    });
+    const data = await res.json();
+    return data;
+  } catch (e) {
+    log(`⚠️  cancelOrder ${orderId}: ${e.message}`);
+  }
+}
+
+// ── Fetch real USDC balance from Polymarket ───────────────────────────────────
+async function fetchRealBalance() {
+  try {
+    const headers = buildL2Headers('GET', '/balance', '');
+    const res  = await fetch(`${CLOB_REST}/balance`, { headers, timeout: 5000 });
+    const data = await res.json();
+    if (data.balance !== undefined) {
+      state.balance = +parseFloat(data.balance).toFixed(2);
+      log(`💰 Real balance: $${state.balance}`);
+    }
+  } catch (e) { log(`⚠️  fetchRealBalance: ${e.message}`); }
+}
 
 // ── Binance WebSocket ─────────────────────────────────────────────────────────
 function connectBinance(asset) {
@@ -152,7 +446,7 @@ function connectBinance(asset) {
       const logThresh = Math.max(price * 0.0005, 0.00001);
       if (Math.abs(price - binanceLastPx[asset]) >= logThresh && nowSec - binanceLastLog[asset] >= 5) {
         const change = price - binanceLastPx[asset];
-        const dec    = asset === 'DOGE' ? 5 : asset === 'SOL' ? 3 : 2;
+        const dec    = priceDec(asset);
         log(`💹 Binance ${asset} = $${price.toFixed(dec)} (${change >= 0 ? '+' : ''}$${change.toFixed(dec)})`);
         binanceLastPx[asset]  = price;
         binanceLastLog[asset] = nowSec;
@@ -214,7 +508,6 @@ function isTrending(asset) {
   return directions.every(d => d === directions[0]);
 }
 
-// ── Signal check — fire on every valid signal, no side restriction ─────────────
 function checkSignals() {
   if (!botRunning) return;
   if (windowElapsed() >= config.exitAtSecond) return;
@@ -241,7 +534,7 @@ function checkSignals() {
 
     if (!last.direction || last.absChange === 0) continue;
     if (last.absChange <= required) {
-      log(`📊 [${marketId}] ${last.absChange.toFixed(5)} < need ${required.toFixed(5)} — skip`);
+      log(`📊 [${marketId}] ${last.absChange.toFixed(5)} < ${required.toFixed(5)} — skip`);
       continue;
     }
     if (isTrending(asset)) {
@@ -263,45 +556,92 @@ function checkSignals() {
   }
 }
 
-function placeTrade(marketId, w, cws, direction, move, avg, tokenPrice) {
+// ── Place trade — real or demo ────────────────────────────────────────────────
+async function placeTrade(marketId, w, cws, direction, move, avg, tokenPrice) {
   const shares    = config.shares;
   const rawCost   = +(tokenPrice * shares).toFixed(2);
   const fee       = calcFee(shares, tokenPrice);
   const totalCost = +(rawCost + fee).toFixed(2);
 
   if (state.balance < totalCost) {
-    log(`💸 [${marketId}] Low balance $${state.balance.toFixed(2)} need $${totalCost}`);
+    log(`💸 [${marketId}] Low balance $${state.balance} need $${totalCost}`);
     return;
   }
 
-  const id = tradeId();
-  state.balance   = subMoney(state.balance, totalCost);
-  state.totalFees = +(state.totalFees + fee).toFixed(4);
+  const tokenId = direction === 'UP' ? w.upToken : w.dnToken;
 
-  const trade = {
-    id, marketId, windowStart: cws,
-    asset: MARKET_ASSETS[marketId], side: direction,
-    entryPrice: tokenPrice, shares, rawCost, fee, cost: totalCost,
-    tp: config.takeProfit,
-    upToken: w.upToken, dnToken: w.dnToken,
-    move: +move.toFixed(6), avg: +avg.toFixed(6),
-    assetPriceAtEntry: +binancePrices[MARKET_ASSETS[marketId]].toFixed(6),
-    openedAt: new Date().toISOString(), floatingPnl: 0,
-    exitReason: null,
-  };
+  // ── Real trading — place FOK buy ──────────────────────────────────────────
+  if (IS_LIVE) {
+    log(`📤 [${marketId}] Placing REAL FOK BUY ${direction} token=${tokenId.slice(-8)} price=${tokenPrice} size=${shares}`);
+    const result = await placeRealBuyOrder(tokenId, tokenPrice, shares);
+    if (!result.success) {
+      log(`❌ [${marketId}] BUY order rejected — skipping trade`);
+      return;
+    }
+    // Immediately place limit SELL at TP price
+    const tpResult = await placeRealSellOrder(tokenId, config.takeProfit, shares);
+    const tpOrderId = tpResult.success ? tpResult.orderId : null;
 
-  state.openTrades.push(trade);
-  const wstKey = `${marketId}:${cws}`;
-  if (!windowState[wstKey]) windowState[wstKey] = { trades: 0 };
-  windowState[wstKey].trades++;
-  saveState();
+    // Deduct from balance and record trade
+    state.balance   = subMoney(state.balance, totalCost);
+    state.totalFees = +(state.totalFees + fee).toFixed(4);
 
-  log(`🚀 [${marketId}] BUY ${direction} [${id}] token=${tokenPrice.toFixed(3)} shares=${shares} cost=$${rawCost} fee=$${fee} total=$${totalCost} | TP=${config.takeProfit} | bal=$${state.balance.toFixed(2)}`);
+    const id = tradeId();
+    const trade = {
+      id, marketId, windowStart: cws,
+      asset: MARKET_ASSETS[marketId], side: direction,
+      entryPrice: tokenPrice, shares, rawCost, fee, cost: totalCost,
+      tp: config.takeProfit,
+      upToken: w.upToken, dnToken: w.dnToken,
+      tokenId,
+      tpOrderId,
+      move: +move.toFixed(6), avg: +avg.toFixed(6),
+      assetPriceAtEntry: +binancePrices[MARKET_ASSETS[marketId]].toFixed(6),
+      openedAt: new Date().toISOString(), floatingPnl: 0,
+      exitReason: null, isReal: true,
+    };
+    state.openTrades.push(trade);
+    const wstKey = `${marketId}:${cws}`;
+    if (!windowState[wstKey]) windowState[wstKey] = { trades: 0 };
+    windowState[wstKey].trades++;
+    recordEquity();
+    saveState();
+    log(`🚀 [${marketId}] REAL BUY ${direction} [${id}] token=${tokenPrice} shares=${shares} cost=$${rawCost} fee=$${fee} TP_order=${tpOrderId||'failed'} | bal=$${state.balance}`);
+
+  } else {
+    // ── Demo mode ──────────────────────────────────────────────────────────
+    state.balance   = subMoney(state.balance, totalCost);
+    state.totalFees = +(state.totalFees + fee).toFixed(4);
+
+    const id = tradeId();
+    const trade = {
+      id, marketId, windowStart: cws,
+      asset: MARKET_ASSETS[marketId], side: direction,
+      entryPrice: tokenPrice, shares, rawCost, fee, cost: totalCost,
+      tp: config.takeProfit,
+      upToken: w.upToken, dnToken: w.dnToken,
+      tokenId,
+      move: +move.toFixed(6), avg: +avg.toFixed(6),
+      assetPriceAtEntry: +binancePrices[MARKET_ASSETS[marketId]].toFixed(6),
+      openedAt: new Date().toISOString(), floatingPnl: 0,
+      exitReason: null, isReal: false,
+    };
+    state.openTrades.push(trade);
+    const wstKey = `${marketId}:${cws}`;
+    if (!windowState[wstKey]) windowState[wstKey] = { trades: 0 };
+    windowState[wstKey].trades++;
+    recordEquity();
+    saveState();
+    log(`🚀 [${marketId}] DEMO BUY ${direction} [${id}] token=${tokenPrice} shares=${shares} cost=$${rawCost} fee=$${fee} | bal=$${state.balance}`);
+  }
+
   emitFn('snapshot', buildDashboardSnapshot());
 }
 
-// ── TP check — exit at 0.99 mid-window ───────────────────────────────────────
-function checkTP() {
+// ── TP check ──────────────────────────────────────────────────────────────────
+// In live mode TP is handled by the limit sell order placed on CLOB
+// This function handles demo mode and also detects if TP filled in live mode
+async function checkTP() {
   const toClose = [];
   for (const t of state.openTrades) {
     if (!t.upToken || !t.dnToken) continue;
@@ -309,26 +649,33 @@ function checkTP() {
     const curPrice = getPrice(tokenId);
     if (curPrice <= 0) continue;
     t.floatingPnl = +((curPrice - t.entryPrice) * t.shares).toFixed(4);
+    // In demo — close when token reaches TP
+    // In live — also close locally when token reaches TP (limit sell should have filled)
     if (curPrice >= config.takeProfit) toClose.push({ trade: t, exitPrice: curPrice });
   }
   for (const { trade: t, exitPrice } of toClose) {
-    const proceeds = +(exitPrice * t.shares).toFixed(2);
-    const pnl      = +(proceeds - t.cost).toFixed(4);
-    state.balance   = addMoney(state.balance, proceeds);
-    state.totalPnl  = +(state.totalPnl + pnl).toFixed(4);
-    state.openTrades = state.openTrades.filter(x => x.id !== t.id);
-    state.closedTrades.push({
-      ...t, exitPrice, proceeds, realizedPnl: pnl,
-      closedAt: new Date().toISOString(), exitReason: 'TP',
-    });
-    saveState();
-    log(`🟢 [${t.marketId}] TP ${t.side} [${t.id}] entry=${t.entryPrice.toFixed(3)} exit=${exitPrice.toFixed(3)} fee=$${t.fee} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
-    emitFn('snapshot', buildDashboardSnapshot());
+    await closeTrade(t, exitPrice, 'TP');
   }
 }
 
-// ── 4:50 window exit ──────────────────────────────────────────────────────────
-function checkWindowExit() {
+async function closeTrade(t, exitPrice, reason) {
+  const proceeds = +(exitPrice * t.shares).toFixed(2);
+  const pnl      = +(proceeds - t.cost).toFixed(4);
+  state.balance   = addMoney(state.balance, proceeds);
+  state.totalPnl  = +(state.totalPnl + pnl).toFixed(4);
+  state.openTrades = state.openTrades.filter(x => x.id !== t.id);
+  state.closedTrades.push({
+    ...t, exitPrice, proceeds, realizedPnl: pnl,
+    closedAt: new Date().toISOString(), exitReason: reason,
+  });
+  recordEquity();
+  saveState();
+  log(`${pnl >= 0 ? '🟢' : '🔴'} [${t.marketId}] ${reason} ${t.side} [${t.id}] entry=${t.entryPrice.toFixed(3)} exit=${exitPrice.toFixed(3)} fee=$${t.fee} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
+  emitFn('snapshot', buildDashboardSnapshot());
+}
+
+// ── 4:55 window exit ──────────────────────────────────────────────────────────
+async function checkWindowExit() {
   const elapsed = windowElapsed();
   const cws     = currentWindowStart();
   if (elapsed < config.exitAtSecond) return;
@@ -340,32 +687,29 @@ function checkWindowExit() {
     if (!openForMarket.length) { exitFiredWindow[marketId] = cws; continue; }
 
     exitFiredWindow[marketId] = cws;
-    log(`⏰ [${marketId}] ${config.exitAtSecond}s exit — closing ${openForMarket.length} position(s)`);
+    log(`⏰ [${marketId}] ${config.exitAtSecond}s EXIT — closing ${openForMarket.length} position(s)`);
 
-    const closedNow = [];
+    if (IS_LIVE) {
+      // Cancel any pending TP sell orders first
+      for (const t of openForMarket) {
+        if (t.tpOrderId) {
+          await cancelOrder(t.tpOrderId);
+          log(`🗑️  Cancelled TP order ${t.tpOrderId}`);
+        }
+      }
+      // Batch sell all positions
+      await placeBatchSellOrders(openForMarket);
+      // Sync balance from Polymarket
+      await fetchRealBalance();
+    }
+
+    // Close locally regardless of live/demo
     for (const t of openForMarket) {
       const tokenId  = t.side === 'UP' ? t.upToken : t.dnToken;
       const curPrice = getPrice(tokenId);
-      if (curPrice <= 0) { log(`⚠️  [${marketId}] No price for [${t.id}] at exit`); continue; }
-      const proceeds = +(curPrice * t.shares).toFixed(2);
-      const pnl      = +(proceeds - t.cost).toFixed(4);
-      state.balance   = addMoney(state.balance, proceeds);
-      state.totalPnl  = +(state.totalPnl + pnl).toFixed(4);
-      state.closedTrades.push({
-        ...t, exitPrice: curPrice, proceeds, realizedPnl: pnl,
-        closedAt: new Date().toISOString(), exitReason: 'WINDOW_EXIT',
-      });
-      closedNow.push({ t, curPrice, pnl });
+      const exitPrc  = curPrice > 0 ? curPrice : t.entryPrice;
+      await closeTrade(t, exitPrc, 'WINDOW_EXIT');
     }
-
-    const closedIds = new Set(closedNow.map(x => x.t.id));
-    state.openTrades = state.openTrades.filter(t => !closedIds.has(t.id));
-    saveState();
-
-    for (const { t, curPrice, pnl } of closedNow) {
-      log(`${pnl >= 0 ? '🟢' : '🔴'} [${marketId}] EXIT@${config.exitAtSecond}s ${t.side} [${t.id}] entry=${t.entryPrice.toFixed(3)} exit=${curPrice.toFixed(3)} pnl=$${pnl.toFixed(2)} bal=$${state.balance.toFixed(2)}`);
-    }
-    emitFn('snapshot', buildDashboardSnapshot());
   }
 }
 
@@ -501,12 +845,6 @@ function updateFloating() {
   }
 }
 
-function priceDec(asset) {
-  if (asset === 'DOGE') return 5;
-  if (asset === 'SOL')  return 3;
-  return 2;
-}
-
 function buildSignalSnapshot(marketId) {
   const asset    = MARKET_ASSETS[marketId];
   const cws      = currentWindowStart();
@@ -557,7 +895,9 @@ function buildDashboardSnapshot() {
     totalFees:    +state.totalFees.toFixed(2),
     openTrades:   state.openTrades,
     closedTrades: state.closedTrades.slice(-80),
+    equityCurve,
     botRunning,
+    isLive:       IS_LIVE,
     config,
     markets: {
       'btc-5m':  buildSignalSnapshot('btc-5m'),
@@ -576,22 +916,6 @@ function prune() {
   }
 }
 
-let timer = null;
-async function tick() {
-  try {
-    prune();
-    await refreshMarkets();
-    await pollPrices();
-    updateFloating();
-    if (botRunning) {
-      checkWindowExit();
-      checkSignals();
-      checkTP();
-    }
-    emitFn('snapshot', buildDashboardSnapshot());
-  } catch (e) { log(`⚠️  tick: ${e.message}`); }
-}
-
 function updateConfig(newCfg) {
   if (newCfg.shares         !== undefined) config.shares         = Math.max(1,    Math.min(1000, Number(newCfg.shares)));
   if (newCfg.moveMultiplier !== undefined) config.moveMultiplier = Math.max(0.1,  Math.min(5,    Number(newCfg.moveMultiplier)));
@@ -604,23 +928,66 @@ function updateConfig(newCfg) {
   if (newCfg.historyWindow  !== undefined) config.historyWindow  = Math.max(300,  Math.min(3600, Number(newCfg.historyWindow)));
   if (newCfg.markets        !== undefined) config.markets        = { ...config.markets, ...newCfg.markets };
   saveConfig();
-  log(`⚙️  Config updated: shares=${config.shares} mult=${config.moveMultiplier} block=${config.blockSize}s tp=${config.takeProfit} exit=${config.exitAtSecond}s`);
+  log(`⚙️  Config: shares=${config.shares} mult=${config.moveMultiplier} block=${config.blockSize}s tp=${config.takeProfit} exit=${config.exitAtSecond}s`);
   emitFn('snapshot', buildDashboardSnapshot());
+}
+
+function setBotRunning(val) {
+  botRunning = val;
+  log(val ? '▶️  Bot STARTED' : '⏹️  Bot STOPPED');
+  emitFn('snapshot', buildDashboardSnapshot());
+}
+
+let timer = null;
+async function tick() {
+  try {
+    prune();
+    await refreshMarkets();
+    await pollPrices();
+    updateFloating();
+    if (botRunning) {
+      await checkWindowExit();
+      checkSignals();
+      await checkTP();
+    }
+    // Sync real balance every 30 seconds
+    if (IS_LIVE && apiCreds && Math.floor(Date.now() / 1000) % 30 === 0) {
+      await fetchRealBalance();
+    }
+    emitFn('snapshot', buildDashboardSnapshot());
+  } catch (e) { log(`⚠️  tick: ${e.message}`); }
 }
 
 async function start(emit, logEmit) {
   emitFn = emit; logFn = logEmit;
   loadConfig();
   loadState();
-  log('🚀 HYDRA — BTC+ETH+SOL+DOGE 5m | every signal | TP=0.99 | exit@4:50');
+  loadEquity();
+
+  log(`🚀 HYDRA ${IS_LIVE ? '🔴 LIVE' : '🟡 DEMO'} — BTC+ETH+SOL+DOGE 5m`);
   log(`   shares=${config.shares} mult=${config.moveMultiplier} block=${config.blockSize}s tp=${config.takeProfit} exit=${config.exitAtSecond}s`);
+  log(`   Mode: ${IS_LIVE ? 'REAL TRADING — USDC on Polygon' : 'DEMO — simulated'}`);
+
+  if (IS_LIVE) {
+    if (!PRIVATE_KEY || !FUNDER_ADDRESS) {
+      log('❌ PRIVATE_KEY or FUNDER_ADDRESS missing — cannot start live trading');
+      return;
+    }
+    initWallet();
+    await initApiCreds();
+    await fetchRealBalance();
+    log(`💰 Real balance: $${state.balance}`);
+  } else {
+    log(`💰 Demo balance: $${state.balance}`);
+  }
+
   for (const asset of Object.keys(BINANCE_STREAMS)) connectBinance(asset);
   await tick();
   timer = setInterval(tick, 1000);
   setInterval(async function() {
     await pollPrices();
     updateFloating();
-    if (botRunning) checkTP();
+    if (botRunning) await checkTP();
     emitFn('prices', {
       btcPrice:  +binancePrices.BTC.toFixed(2),
       ethPrice:  +binancePrices.ETH.toFixed(2),
@@ -628,13 +995,6 @@ async function start(emit, logEmit) {
       dogePrice: +binancePrices.DOGE.toFixed(5),
     });
   }, 2000);
-  log(`💰 Balance: $${state.balance.toFixed(2)}`);
-}
-
-function setBotRunning(val) {
-  botRunning = val;
-  log(val ? '▶️  Bot STARTED' : '⏹️  Bot STOPPED');
-  emitFn('snapshot', buildDashboardSnapshot());
 }
 
 function stop() {
