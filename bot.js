@@ -51,9 +51,11 @@ const CRYPTO_FEE_RATE  = 0.018;
 const STARTING_BALANCE = IS_LIVE ? 150 : 2000;
 const WINDOW_SIZE      = 300;
 
-// ── V2 contract addresses (from official docs) ────────────────────────────────
+// ── V2 constants ──────────────────────────────────────────────────────────────
 const CTF_EXCHANGE_V2      = '0xE111180000d2663C0091e4f400237545B87B996B';
 const NEG_RISK_EXCHANGE_V2 = '0xe2222d279d744050d28e00520010520000310F59';
+const ZERO_BYTES32         = '0x0000000000000000000000000000000000000000000000000000000000000000';
+const ZERO_ADDRESS         = '0x0000000000000000000000000000000000000000';
 
 let config   = { ...DEFAULT_CONFIG };
 let apiCreds = null;
@@ -169,20 +171,16 @@ function initWallet() {
   log(`💼 Funder:      ${FUNDER_ADDRESS}`);
   log(`🔏 Sig type:    ${SIGNATURE_TYPE}`);
   if (wallet.address.toLowerCase() === FUNDER_ADDRESS.toLowerCase()) {
-    log('⚠️  WARNING: EOA and Funder are the same address — FUNDER_ADDRESS should be your Polymarket proxy from polymarket.com/settings');
+    log('⚠️  WARNING: EOA and Funder are same — FUNDER_ADDRESS should be proxy from polymarket.com/settings');
   }
 }
 
-// ── L1 auth ───────────────────────────────────────────────────────────────────
-// KEY FIX: POLY_ADDRESS header must be EOA wallet.address NOT funder address
-// The ClobAuth struct address field must also be wallet.address (EOA)
-// This is what was causing "Invalid L1 Request headers"
+// ── L1 auth — POLY_ADDRESS must be EOA wallet.address ────────────────────────
 async function initApiCreds() {
   try {
     const timestamp = Math.floor(Date.now() / 1000).toString();
     const nonce     = Math.floor(Math.random() * 1e10).toString();
 
-    // ClobAuthDomain stays version "1" in V2 — confirmed in official docs
     const domain = { name: 'ClobAuthDomain', version: '1', chainId: CHAIN_ID };
     const types  = {
       ClobAuth: [
@@ -193,7 +191,7 @@ async function initApiCreds() {
       ],
     };
     const value = {
-      address:   wallet.address,  // EOA address — signs the message
+      address:   wallet.address,
       timestamp,
       nonce:     parseInt(nonce),
       message:   'This message attests that I control the given wallet',
@@ -201,10 +199,9 @@ async function initApiCreds() {
 
     const sig = await wallet._signTypedData(domain, types, value);
 
-    // POLY_ADDRESS must be EOA wallet.address — NOT funder address
-    // This was the bug causing "Invalid L1 Request headers"
+    // POLY_ADDRESS = EOA wallet.address (NOT funder) — this was the L1 fix
     const headers = {
-      'POLY_ADDRESS':        wallet.address,  // ← EOA address (THE FIX)
+      'POLY_ADDRESS':        wallet.address,
       'POLY_SIGNATURE':      sig,
       'POLY_TIMESTAMP':      timestamp,
       'POLY_NONCE':          nonce,
@@ -212,7 +209,6 @@ async function initApiCreds() {
       'Content-Type':        'application/json',
     };
 
-    // Try GET first — load existing creds
     const res = await fetch(`${CLOB_REST}/auth/api-key`, { headers, timeout: 10000 });
     if (res.ok) {
       const text = await res.text();
@@ -222,8 +218,6 @@ async function initApiCreds() {
         return;
       }
     }
-
-    // POST — create new creds
     const res2 = await fetch(`${CLOB_REST}/auth/api-key`, {
       method: 'POST', headers, timeout: 10000,
     });
@@ -246,7 +240,7 @@ function buildL2Headers(method, reqPath, body = '') {
   const hmac = crypto.createHmac('sha256', Buffer.from(apiCreds.secret, 'base64'))
     .update(message).digest('base64');
   return {
-    'POLY_ADDRESS':        FUNDER_ADDRESS,   // L2 uses funder address
+    'POLY_ADDRESS':        FUNDER_ADDRESS,
     'POLY_SIGNATURE':      hmac,
     'POLY_TIMESTAMP':      timestamp,
     'POLY_NONCE':          nonce,
@@ -258,26 +252,27 @@ function buildL2Headers(method, reqPath, body = '') {
 }
 
 // ── V2 EIP-712 order signing ──────────────────────────────────────────────────
-// V2 struct: salt, maker, signer, taker, tokenId, makerAmount,
-//            takerAmount, timestamp(ms), metadata(bytes), builder, side, signatureType
-// Removed vs V1: nonce, feeRateBps, expiration, taker
+// Fixes vs previous version:
+// 1. metadata type = bytes32 (not bytes)
+// 2. builder type = bytes32 (not address)
+// 3. metadata value = ZERO_BYTES32 hex string
+// 4. builder value = ZERO_BYTES32 hex string
+// 5. side in wire body = 'BUY'/'SELL' string (not '0'/'1')
+// 6. POST body includes owner = apiKey
 async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
   if (!wallet) throw new Error('No wallet');
 
   const makerAmount = side === 'BUY'
-    ? Math.round(price * size * 1e6)   // pUSD in (6 decimals)
-    : Math.round(size * 1e6);          // shares in
+    ? Math.round(price * size * 1e6)
+    : Math.round(size * 1e6);
   const takerAmount = side === 'BUY'
-    ? Math.round(size * 1e6)           // shares out
-    : Math.round(price * size * 1e6);  // pUSD out
+    ? Math.round(size * 1e6)
+    : Math.round(price * size * 1e6);
 
-  const salt     = Date.now().toString();
-  const tsMs     = Date.now().toString();
-  const zeroAddr = '0x0000000000000000000000000000000000000000';
-
+  const salt = Date.now().toString();
+  const tsMs = Date.now().toString();
   const verifyingContract = negRisk ? NEG_RISK_EXCHANGE_V2 : CTF_EXCHANGE_V2;
 
-  // V2 domain — version "2" for exchange (NOT for auth)
   const domain = {
     name:              'Polymarket CTF Exchange',
     version:           '2',
@@ -285,6 +280,7 @@ async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
     verifyingContract,
   };
 
+  // metadata and builder are bytes32 per official V2 docs
   const types = {
     Order: [
       { name: 'salt',          type: 'uint256' },
@@ -295,8 +291,8 @@ async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
       { name: 'makerAmount',   type: 'uint256' },
       { name: 'takerAmount',   type: 'uint256' },
       { name: 'timestamp',     type: 'uint256' },
-      { name: 'metadata',      type: 'bytes'   },
-      { name: 'builder',       type: 'address' },
+      { name: 'metadata',      type: 'bytes32' },
+      { name: 'builder',       type: 'bytes32' },
       { name: 'side',          type: 'uint8'   },
       { name: 'signatureType', type: 'uint8'   },
     ],
@@ -304,15 +300,15 @@ async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
 
   const orderValue = {
     salt:          BigInt(salt),
-    maker:         FUNDER_ADDRESS,       // pUSD holder = funder/proxy
-    signer:        wallet.address,       // EOA that signs
-    taker:         zeroAddr,
+    maker:         FUNDER_ADDRESS,
+    signer:        wallet.address,
+    taker:         ZERO_ADDRESS,
     tokenId:       BigInt(tokenId),
     makerAmount:   BigInt(makerAmount),
     takerAmount:   BigInt(takerAmount),
     timestamp:     BigInt(tsMs),
-    metadata:      new Uint8Array(0),    // empty bytes
-    builder:       zeroAddr,
+    metadata:      ethers.utils.arrayify(ZERO_BYTES32),
+    builder:       ethers.utils.arrayify(ZERO_BYTES32),
     side:          side === 'BUY' ? 0 : 1,
     signatureType: parseInt(SIGNATURE_TYPE),
   };
@@ -323,15 +319,15 @@ async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
     salt,
     maker:         FUNDER_ADDRESS,
     signer:        wallet.address,
-    taker:         zeroAddr,
+    taker:         ZERO_ADDRESS,
     tokenId:       tokenId.toString(),
     makerAmount:   makerAmount.toString(),
     takerAmount:   takerAmount.toString(),
     timestamp:     tsMs,
-    metadata:      '',                   // empty string in JSON body
-    builder:       zeroAddr,
-    side:          side === 'BUY' ? '0' : '1',
-    signatureType: SIGNATURE_TYPE,
+    metadata:      ZERO_BYTES32,
+    builder:       ZERO_BYTES32,
+    side:          side === 'BUY' ? 'BUY' : 'SELL',
+    signatureType: parseInt(SIGNATURE_TYPE),
     signature,
   };
 }
@@ -340,7 +336,7 @@ async function buildSignedOrderV2(tokenId, side, price, size, negRisk = false) {
 async function placeRealBuyOrder(tokenId, price, size, negRisk = false) {
   try {
     const order   = await buildSignedOrderV2(tokenId, 'BUY', price, size, negRisk);
-    const bodyStr = JSON.stringify({ order, orderType: 'FOK' });
+    const bodyStr = JSON.stringify({ order, owner: apiCreds.apiKey, orderType: 'FOK' });
     const headers = buildL2Headers('POST', '/order', bodyStr);
     const res     = await fetch(`${CLOB_REST}/order`, {
       method: 'POST', headers, body: bodyStr, timeout: 8000,
@@ -363,7 +359,7 @@ async function placeRealBuyOrder(tokenId, price, size, negRisk = false) {
 async function placeRealSellOrder(tokenId, price, size, negRisk = false) {
   try {
     const order   = await buildSignedOrderV2(tokenId, 'SELL', price, size, negRisk);
-    const bodyStr = JSON.stringify({ order, orderType: 'GTC' });
+    const bodyStr = JSON.stringify({ order, owner: apiCreds.apiKey, orderType: 'GTC' });
     const headers = buildL2Headers('POST', '/order', bodyStr);
     const res     = await fetch(`${CLOB_REST}/order`, {
       method: 'POST', headers, body: bodyStr, timeout: 8000,
@@ -392,7 +388,7 @@ async function placeBatchSellOrders(trades) {
       const curPrice = getPrice(tokenId);
       if (curPrice <= 0) continue;
       const order = await buildSignedOrderV2(tokenId, 'SELL', curPrice, t.shares);
-      orders.push({ order, orderType: 'FOK' });
+      orders.push({ order, owner: apiCreds.apiKey, orderType: 'FOK' });
     }
     if (!orders.length) return;
     const bodyStr = JSON.stringify(orders);
@@ -933,7 +929,7 @@ async function start(emit, logEmit) {
     initWallet();
     await initApiCreds();
     if (apiCreds) await fetchRealBalance();
-    else log('⚠️  No API creds — check PRIVATE_KEY and FUNDER_ADDRESS');
+    else log('⚠️  No API creds — check env vars');
   } else {
     log(`💰 Demo balance: $${state.balance}`);
   }
